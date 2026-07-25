@@ -10,9 +10,15 @@ runtime, worktree management, lifecycle observers, or user interfaces.
 
 The reviewed baselines are:
 
-- Agent Orchestrator `d79977a9f5ed5b33f1b6188fe704b5d309023679`
+- Agent Orchestrator `9f8c085fab9db9468d3b3bcd5a39c700023da8e9`
 - OpenAI Symphony specification
   `1f3219bb1ea5f69a1305dc594e79b0db57c113c5`
+
+This AO baseline includes the unified session lifecycle and presentation model,
+workspace recovery metadata, migrations 0032 through 0036, and the repair for
+applying missing out-of-order migrations. The claim and attempt storage design
+must extend those facts and migration rules rather than introduce a parallel
+session-state model.
 
 The first target is a declared `symphony-subset-v1`, not an unqualified
 conformance claim. Unsupported fields or behaviors must fail validation
