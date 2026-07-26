@@ -150,6 +150,9 @@ func (c ProjectConfig) Validate() error {
 	if err := c.TrackerIntake.Validate(); err != nil {
 		return err
 	}
+	if err := validateRepoRelative(c.TrackerIntake.WorkflowPath); err != nil {
+		return fmt.Errorf("trackerIntake.workflowPath %q: %w", c.TrackerIntake.WorkflowPath, err)
+	}
 	return nil
 }
 

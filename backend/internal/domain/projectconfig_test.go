@@ -35,6 +35,8 @@ func TestProjectConfigValidate(t *testing.T) {
 		{"worker-only harness is not auto a reviewer", ProjectConfig{Reviewers: []ReviewerConfig{{Harness: ReviewerHarness(HarnessAider)}}}, true},
 		{"empty reviewer harness", ProjectConfig{Reviewers: []ReviewerConfig{{Harness: ""}}}, true},
 		{"tracker intake assignee rule", ProjectConfig{TrackerIntake: TrackerIntakeConfig{Enabled: true, Assignee: "alice"}}, false},
+		{"tracker intake workflow", ProjectConfig{TrackerIntake: TrackerIntakeConfig{Enabled: true, WorkflowPath: "WORKFLOW.md"}}, false},
+		{"tracker intake workflow escape", ProjectConfig{TrackerIntake: TrackerIntakeConfig{Enabled: true, WorkflowPath: "../WORKFLOW.md"}}, true},
 		{"tracker intake explicit github", ProjectConfig{TrackerIntake: TrackerIntakeConfig{Enabled: true, Provider: TrackerProviderGitHub, Assignee: "alice"}}, false},
 		{"tracker intake no rule", ProjectConfig{TrackerIntake: TrackerIntakeConfig{Enabled: true}}, true},
 		{"tracker intake unknown provider", ProjectConfig{TrackerIntake: TrackerIntakeConfig{Enabled: true, Provider: "linear", Assignee: "alice"}}, true},

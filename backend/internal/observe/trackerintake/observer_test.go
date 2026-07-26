@@ -5,6 +5,8 @@ import (
 	"errors"
 	"io"
 	"log/slog"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -12,6 +14,199 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
+
+func TestPollWorkflowRendersPromptAndFiltersEligibility(t *testing.T) {
+	projectPath := t.TempDir()
+	writeIntakeWorkflow(t, projectPath, `---
+tracker:
+  kind: github
+  provider:
+    repo: acme/demo
+    assignee: alice
+  required_labels: [symphony]
+  active_states: [open]
+agent:
+  max_concurrent_agents: 4
+---
+Implement {{ issue.identifier }}: {{ issue.title }}
+Labels: {{ issue.labels }}
+`)
+	store := &fakeStore{projects: []domain.ProjectRecord{{
+		ID:   "demo",
+		Path: projectPath,
+		Config: domain.ProjectConfig{TrackerIntake: domain.TrackerIntakeConfig{
+			Enabled:      true,
+			WorkflowPath: "WORKFLOW.md",
+		}},
+	}}}
+	tracker := &fakeTracker{issues: []domain.Issue{
+		{ID: domain.TrackerID{Provider: domain.TrackerProviderGitHub, Native: "acme/demo#1"}, Title: "missing label", State: domain.IssueOpen, Assignees: []string{"alice"}},
+		{ID: domain.TrackerID{Provider: domain.TrackerProviderGitHub, Native: "acme/demo#2"}, Title: "eligible", State: domain.IssueOpen, Labels: []string{"SYMPHONY"}, Assignees: []string{"Alice"}},
+	}}
+	spawner := &fakeSpawner{}
+
+	if err := New(singleResolver(tracker), store, spawner, Config{Logger: discardLogger()}).Poll(context.Background()); err != nil {
+		t.Fatalf("Poll() error = %v", err)
+	}
+	if len(spawner.calls) != 1 {
+		t.Fatalf("spawn calls = %+v, want one", spawner.calls)
+	}
+	if got, want := spawner.calls[0].Prompt, "Implement acme/demo#2: eligible\nLabels: symphony"; got != want {
+		t.Fatalf("prompt = %q, want %q", got, want)
+	}
+	if got := tracker.filters[0]; got.Assignee != "alice" || !equalStrings(got.Labels, []string{"symphony"}) {
+		t.Fatalf("tracker filter = %+v", got)
+	}
+}
+
+func TestPollWorkflowEnforcesProjectAndStateConcurrency(t *testing.T) {
+	projectPath := t.TempDir()
+	writeIntakeWorkflow(t, projectPath, `---
+tracker:
+  kind: github
+  provider:
+    assignee: alice
+  active_states: [open]
+agent:
+  max_concurrent_agents: 3
+  max_concurrent_agents_by_state:
+    open: 2
+---
+{{ issue.identifier }}
+`)
+	store := &fakeStore{projects: []domain.ProjectRecord{workflowProject("demo", projectPath)}}
+	tracker := &fakeTracker{issues: []domain.Issue{
+		workflowIssue("acme/demo#1"),
+		workflowIssue("acme/demo#2"),
+		workflowIssue("acme/demo#3"),
+		workflowIssue("acme/demo#4"),
+	}}
+	spawner := &fakeSpawner{}
+
+	if err := New(singleResolver(tracker), store, spawner, Config{MaxWorkflowSessions: 4, Logger: discardLogger()}).Poll(context.Background()); err != nil {
+		t.Fatalf("Poll() error = %v", err)
+	}
+	if len(spawner.calls) != 2 {
+		t.Fatalf("spawn calls = %d, want state limit 2", len(spawner.calls))
+	}
+}
+
+func TestPollWorkflowEnforcesGlobalConcurrencyAcrossProjects(t *testing.T) {
+	firstPath := t.TempDir()
+	secondPath := t.TempDir()
+	for _, path := range []string{firstPath, secondPath} {
+		writeIntakeWorkflow(t, path, `---
+tracker:
+  kind: github
+  provider:
+    assignee: alice
+  active_states: [open]
+agent:
+  max_concurrent_agents: 4
+---
+{{ issue.identifier }}
+`)
+	}
+	store := &fakeStore{projects: []domain.ProjectRecord{
+		workflowProject("first", firstPath),
+		workflowProject("second", secondPath),
+	}}
+	tracker := &fakeTracker{issuesByRepo: map[string][]domain.Issue{
+		"acme/first":  {workflowIssue("acme/first#1"), workflowIssue("acme/first#2")},
+		"acme/second": {workflowIssue("acme/second#1"), workflowIssue("acme/second#2")},
+	}}
+	spawner := &fakeSpawner{}
+
+	if err := New(singleResolver(tracker), store, spawner, Config{MaxWorkflowSessions: 3, Logger: discardLogger()}).Poll(context.Background()); err != nil {
+		t.Fatalf("Poll() error = %v", err)
+	}
+	if len(spawner.calls) != 3 {
+		t.Fatalf("spawn calls = %d, want global limit 3", len(spawner.calls))
+	}
+}
+
+func TestPollWorkflowCountsExistingSessionsAgainstLimits(t *testing.T) {
+	projectPath := t.TempDir()
+	writeIntakeWorkflow(t, projectPath, `---
+tracker:
+  kind: github
+  provider:
+    assignee: alice
+agent:
+  max_concurrent_agents: 2
+---
+{{ issue.identifier }}
+`)
+	store := &fakeStore{
+		projects: []domain.ProjectRecord{workflowProject("demo", projectPath)},
+		sessions: []domain.SessionRecord{{
+			ID:        "demo-1",
+			ProjectID: "demo",
+			IssueID:   "github:acme/demo#existing",
+		}},
+	}
+	tracker := &fakeTracker{issues: []domain.Issue{
+		workflowIssue("acme/demo#2"),
+		workflowIssue("acme/demo#3"),
+	}}
+	spawner := &fakeSpawner{}
+
+	if err := New(singleResolver(tracker), store, spawner, Config{Logger: discardLogger()}).Poll(context.Background()); err != nil {
+		t.Fatalf("Poll() error = %v", err)
+	}
+	if len(spawner.calls) != 1 {
+		t.Fatalf("spawn calls = %d, want one remaining project slot", len(spawner.calls))
+	}
+}
+
+func TestPollWorkflowInvalidReloadRetainsLastKnownGood(t *testing.T) {
+	projectPath := t.TempDir()
+	valid := `---
+tracker:
+  kind: github
+  provider:
+    assignee: alice
+---
+Valid {{ issue.identifier }}
+`
+	writeIntakeWorkflow(t, projectPath, valid)
+	store := &fakeStore{projects: []domain.ProjectRecord{workflowProject("demo", projectPath)}}
+	tracker := &fakeTracker{issues: []domain.Issue{workflowIssue("acme/demo#1")}}
+	spawner := &fakeSpawner{}
+	observer := New(singleResolver(tracker), store, spawner, Config{Logger: discardLogger()})
+
+	if err := observer.Poll(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	writeIntakeWorkflow(t, projectPath, "---\ntracker: [\n---\nBroken\n")
+	tracker.issues = []domain.Issue{workflowIssue("acme/demo#2")}
+	if err := observer.Poll(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if len(spawner.calls) != 2 || spawner.calls[1].Prompt != "Valid acme/demo#2" {
+		t.Fatalf("spawn calls after invalid reload = %+v", spawner.calls)
+	}
+}
+
+func TestPollWorkflowTemplateFailureDoesNotSpawn(t *testing.T) {
+	projectPath := t.TempDir()
+	writeIntakeWorkflow(t, projectPath, `---
+tracker:
+  kind: github
+  provider:
+    assignee: alice
+---
+{{ issue.unknown }}
+`)
+	store := &fakeStore{projects: []domain.ProjectRecord{workflowProject("demo", projectPath)}}
+	spawner := &fakeSpawner{}
+	if err := New(singleResolver(&fakeTracker{issues: []domain.Issue{workflowIssue("acme/demo#1")}}), store, spawner, Config{Logger: discardLogger()}).Poll(context.Background()); err != nil {
+		t.Fatalf("Poll() error = %v", err)
+	}
+	if len(spawner.calls) != 0 {
+		t.Fatalf("spawn calls = %+v, want none", spawner.calls)
+	}
+}
 
 func TestPollSpawnsWorkerForEligibleIssue(t *testing.T) {
 	store := &fakeStore{
@@ -391,4 +586,44 @@ func (f *fakeSpawner) Spawn(_ context.Context, cfg ports.SpawnConfig) (domain.Se
 
 func discardLogger() *slog.Logger {
 	return slog.New(slog.NewTextHandler(io.Discard, nil))
+}
+
+func writeIntakeWorkflow(t *testing.T, projectPath, content string) {
+	t.Helper()
+	if err := os.WriteFile(filepath.Join(projectPath, "WORKFLOW.md"), []byte(content), 0o600); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func workflowProject(id, path string) domain.ProjectRecord {
+	return domain.ProjectRecord{
+		ID:            id,
+		Path:          path,
+		RepoOriginURL: "https://github.com/acme/" + id + ".git",
+		Config: domain.ProjectConfig{TrackerIntake: domain.TrackerIntakeConfig{
+			Enabled:      true,
+			WorkflowPath: "WORKFLOW.md",
+		}},
+	}
+}
+
+func workflowIssue(native string) domain.Issue {
+	return domain.Issue{
+		ID:        domain.TrackerID{Provider: domain.TrackerProviderGitHub, Native: native},
+		Title:     native,
+		State:     domain.IssueOpen,
+		Assignees: []string{"alice"},
+	}
+}
+
+func equalStrings(left, right []string) bool {
+	if len(left) != len(right) {
+		return false
+	}
+	for i := range left {
+		if left[i] != right[i] {
+			return false
+		}
+	}
+	return true
 }
