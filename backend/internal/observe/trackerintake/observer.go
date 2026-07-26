@@ -27,6 +27,9 @@ const (
 	// DefaultMaxWorkflowSessions bounds sessions spawned by the Symphony lane
 	// across all projects. Legacy tracker intake remains unchanged.
 	DefaultMaxWorkflowSessions = 10
+	// DefaultClaimStaleAfter releases a reservation left without a bound
+	// session after a daemon crash between claim and Spawn completion.
+	DefaultClaimStaleAfter = 5 * time.Minute
 	// maxIntakePromptLen mirrors the session HTTP prompt limit. Intake uses the
 	// session service directly, so it must enforce the same boundary itself.
 	maxIntakePromptLen = 4096
@@ -39,6 +42,22 @@ const (
 type Store interface {
 	ListProjects(ctx context.Context) ([]domain.ProjectRecord, error)
 	ListAllSessions(ctx context.Context) ([]domain.SessionRecord, error)
+}
+
+// WorkflowRunStore is the durable claim/retry surface required by the Symphony
+// lane. Keeping it separate from Store leaves legacy tracker intake unchanged.
+type WorkflowRunStore interface {
+	TryClaimWorkflowIssue(ctx context.Context, rec domain.WorkflowRunRecord) (bool, error)
+	BindWorkflowIssueSession(ctx context.Context, projectID domain.ProjectID, issueID domain.IssueID, sessionID domain.SessionID, updatedAt time.Time) (bool, error)
+	QueueWorkflowRetry(ctx context.Context, rec domain.WorkflowRunRecord) (bool, error)
+	ReleaseWorkflowIssue(ctx context.Context, projectID domain.ProjectID, issueID domain.IssueID, reason string, updatedAt time.Time) (bool, error)
+	ListActiveWorkflowRuns(ctx context.Context) ([]domain.WorkflowRunRecord, error)
+}
+
+// Terminator stops an AO session when tracker reconciliation makes its issue
+// terminal or ineligible, or before a completed session is queued to continue.
+type Terminator interface {
+	Kill(ctx context.Context, id domain.SessionID) (bool, error)
 }
 
 // Spawner is the session creation surface used by intake.
@@ -78,6 +97,8 @@ type Config struct {
 	FailureBackoff      time.Duration
 	MaxWorkflowSessions int
 	WorkflowOptions     workflow.Options
+	Terminator          Terminator
+	ClaimStaleAfter     time.Duration
 	Clock               func() time.Time
 	Logger              *slog.Logger
 }
@@ -96,6 +117,8 @@ type Observer struct {
 	workflowOpts   workflow.Options
 	reloaders      map[string]*workflow.Reloader
 	nextInterval   time.Duration
+	terminator     Terminator
+	claimStale     time.Duration
 }
 
 // New constructs an Observer with safe defaults.
@@ -108,6 +131,8 @@ func New(resolver TrackerResolver, store Store, spawner Spawner, cfg Config) *Ob
 		failureBackoff: cfg.FailureBackoff,
 		maxWorkflow:    cfg.MaxWorkflowSessions,
 		workflowOpts:   cfg.WorkflowOptions,
+		terminator:     cfg.Terminator,
+		claimStale:     cfg.ClaimStaleAfter,
 		clock:          cfg.Clock,
 		logger:         cfg.Logger,
 		backoffUntil:   map[string]time.Time{},
@@ -121,6 +146,9 @@ func New(resolver TrackerResolver, store Store, spawner Spawner, cfg Config) *Ob
 	}
 	if o.maxWorkflow <= 0 {
 		o.maxWorkflow = DefaultMaxWorkflowSessions
+	}
+	if o.claimStale <= 0 {
+		o.claimStale = DefaultClaimStaleAfter
 	}
 	if o.clock == nil {
 		o.clock = time.Now
@@ -184,6 +212,10 @@ func (o *Observer) Poll(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
+	retryAttempts, err := o.reconcileWorkflowRuns(ctx, enabledProjects, sessions, now)
+	if err != nil {
+		return err
+	}
 	seen := seenIssueIDs(sessions)
 	budget := newDispatchBudget(enabledProjects, sessions, o.maxWorkflow)
 	for _, project := range enabledProjects {
@@ -194,7 +226,7 @@ func (o *Observer) Poll(ctx context.Context) error {
 			o.logger.Debug("tracker intake: project in failure backoff", "project", project.ID, "until", until)
 			continue
 		}
-		if failed := o.pollProject(ctx, project, seen, budget); failed {
+		if failed := o.pollProject(ctx, project, seen, budget, retryAttempts); failed {
 			o.backoffUntil[project.ID] = now.Add(o.failureBackoff)
 		} else {
 			delete(o.backoffUntil, project.ID)
@@ -216,9 +248,166 @@ func (o *Observer) effectiveTick() time.Duration {
 	return o.tick
 }
 
+func (o *Observer) reconcileWorkflowRuns(ctx context.Context, projects []domain.ProjectRecord, sessions []domain.SessionRecord, now time.Time) (map[domain.IssueID]int64, error) {
+	retryAttempts := make(map[domain.IssueID]int64)
+	runStore, ok := o.store.(WorkflowRunStore)
+	if !ok {
+		return retryAttempts, nil
+	}
+	runs, err := runStore.ListActiveWorkflowRuns(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("tracker intake: list active workflow runs: %w", err)
+	}
+	if len(runs) == 0 {
+		return retryAttempts, nil
+	}
+	projectByID := make(map[domain.ProjectID]domain.ProjectRecord, len(projects))
+	for _, project := range projects {
+		projectByID[domain.ProjectID(project.ID)] = project
+	}
+	sessionByID := make(map[domain.SessionID]domain.SessionRecord, len(sessions))
+	for _, session := range sessions {
+		sessionByID[session.ID] = session
+	}
+	for _, run := range runs {
+		project, exists := projectByID[run.ProjectID]
+		if !exists || project.Config.TrackerIntake.WorkflowPath == "" {
+			continue
+		}
+		cfg := project.Config.TrackerIntake.WithDefaults()
+		candidate, enabled, reloadErr := o.workflowForProject(project, cfg)
+		if reloadErr != nil && !enabled {
+			continue
+		}
+		cfg, err = intakeConfigFromWorkflow(cfg, candidate)
+		if err != nil {
+			continue
+		}
+		tracker, err := o.resolver.Resolve(cfg.Provider)
+		if err != nil {
+			continue
+		}
+		trackerID, ok := trackerIDFromCanonical(run.IssueID)
+		if !ok {
+			_, _ = runStore.ReleaseWorkflowIssue(ctx, run.ProjectID, run.IssueID, "invalid_issue_id", now)
+			continue
+		}
+		issue, err := tracker.Get(ctx, trackerID)
+		if err != nil {
+			o.logger.Warn("tracker intake: reconcile issue failed", "project", project.ID, "issue", run.IssueID, "err", err)
+			continue
+		}
+		reason := workflowReleaseReason(issue, cfg, candidate)
+		if reason != "" {
+			if !o.stopWorkflowSession(ctx, run, sessionByID) {
+				continue
+			}
+			if _, err := runStore.ReleaseWorkflowIssue(ctx, run.ProjectID, run.IssueID, reason, now); err != nil {
+				return nil, err
+			}
+			continue
+		}
+		switch run.State {
+		case domain.WorkflowRunClaimed:
+			if run.SessionID == "" && !run.UpdatedAt.IsZero() && !run.UpdatedAt.Add(o.claimStale).After(now) {
+				if _, err := runStore.ReleaseWorkflowIssue(ctx, run.ProjectID, run.IssueID, "orphaned_claim", now); err != nil {
+					return nil, err
+				}
+			}
+		case domain.WorkflowRunRunning:
+			session, exists := sessionByID[run.SessionID]
+			if run.SessionID == "" || !exists {
+				if _, err := runStore.ReleaseWorkflowIssue(ctx, run.ProjectID, run.IssueID, "orphaned_session", now); err != nil {
+					return nil, err
+				}
+				continue
+			}
+			if session.Activity.State != domain.ActivityExited && !session.IsTerminated {
+				continue
+			}
+			attempt := int64(1)
+			due := now.Add(ContinuationRetryDelay)
+			lastError := ""
+			if session.IsTerminated {
+				attempt = run.Attempt + 1
+				if attempt < 1 {
+					attempt = 1
+				}
+				due = now.Add(FailureRetryDelay(attempt, candidate.Config.Agent.MaxRetryBackoff))
+				lastError = "session terminated before issue became ineligible"
+			} else if !o.stopWorkflowSession(ctx, run, sessionByID) {
+				continue
+			}
+			if _, err := runStore.QueueWorkflowRetry(ctx, domain.WorkflowRunRecord{
+				ProjectID:        run.ProjectID,
+				IssueID:          run.IssueID,
+				WorkflowRevision: candidate.Revision,
+				Attempt:          attempt,
+				RetryDueAt:       due,
+				LastError:        lastError,
+				UpdatedAt:        now,
+			}); err != nil {
+				return nil, err
+			}
+		case domain.WorkflowRunRetryQueued:
+			if !run.RetryDueAt.IsZero() && !run.RetryDueAt.After(now) {
+				retryAttempts[run.IssueID] = run.Attempt
+				// Releasing here lets the normal candidate pass reclaim and
+				// dispatch with the latest workflow revision and slot budget.
+				if _, err := runStore.ReleaseWorkflowIssue(ctx, run.ProjectID, run.IssueID, "retry_due", now); err != nil {
+					return nil, err
+				}
+			}
+		}
+	}
+	return retryAttempts, nil
+}
+
+func (o *Observer) stopWorkflowSession(ctx context.Context, run domain.WorkflowRunRecord, sessions map[domain.SessionID]domain.SessionRecord) bool {
+	if run.SessionID == "" {
+		return true
+	}
+	session, ok := sessions[run.SessionID]
+	if !ok || session.IsTerminated {
+		return true
+	}
+	if o.terminator == nil {
+		o.logger.Error("tracker intake: cannot reconcile live workflow session without terminator", "project", run.ProjectID, "issue", run.IssueID, "session", run.SessionID)
+		return false
+	}
+	if _, err := o.terminator.Kill(ctx, run.SessionID); err != nil {
+		o.logger.Error("tracker intake: terminate workflow session failed", "project", run.ProjectID, "issue", run.IssueID, "session", run.SessionID, "err", err)
+		return false
+	}
+	return true
+}
+
+func workflowReleaseReason(issue domain.Issue, cfg domain.TrackerIntakeConfig, candidate workflow.Workflow) string {
+	state := normalizedState(issue.State)
+	terminal := candidate.Config.Tracker.TerminalStates
+	if len(terminal) == 0 {
+		terminal = []string{string(domain.IssueDone), string(domain.IssueCancelled)}
+	}
+	if containsFold(terminal, state) {
+		return "terminal:" + state
+	}
+	if !issueMatchesConfig(issue, cfg) || !workflowIssueEligible(issue, candidate) {
+		return "ineligible:" + state
+	}
+	return ""
+}
+
+func trackerIDFromCanonical(issueID domain.IssueID) (domain.TrackerID, bool) {
+	provider, native, ok := strings.Cut(string(issueID), ":")
+	if !ok || strings.TrimSpace(provider) == "" || strings.TrimSpace(native) == "" {
+		return domain.TrackerID{}, false
+	}
+	return domain.TrackerID{Provider: domain.TrackerProvider(provider), Native: native}, true
+}
+
 // pollProject returns failed=true for conditions that should be retried after a
 // backoff window rather than logged on every poll.
-func (o *Observer) pollProject(ctx context.Context, project domain.ProjectRecord, seen map[domain.IssueID]bool, budget *dispatchBudget) (failed bool) {
+func (o *Observer) pollProject(ctx context.Context, project domain.ProjectRecord, seen map[domain.IssueID]bool, budget *dispatchBudget, retryAttempts map[domain.IssueID]int64) (failed bool) {
 	cfg := project.Config.TrackerIntake.WithDefaults()
 	if !cfg.Enabled {
 		return false
@@ -292,23 +481,74 @@ func (o *Observer) pollProject(ctx context.Context, project domain.ProjectRecord
 			continue
 		}
 		prompt := BuildIssuePrompt(issue)
+		attempt := retryAttempts[issueID]
 		if workflowEnabled {
-			prompt, err = renderWorkflowPrompt(workflowConfig, issue)
+			prompt, err = renderWorkflowPrompt(workflowConfig, issue, attempt)
 			if err != nil {
 				o.logger.Error("tracker intake: render workflow prompt failed", "project", project.ID, "issue", issueID, "err", err)
 				spawnFailed = true
 				continue
 			}
 		}
-		if _, _, _, err := o.spawner.Spawn(ctx, ports.SpawnConfig{
+		var runStore WorkflowRunStore
+		if workflowEnabled {
+			var ok bool
+			runStore, ok = o.store.(WorkflowRunStore)
+			if !ok {
+				o.logger.Error("tracker intake: workflow run store unavailable", "project", project.ID)
+				spawnFailed = true
+				continue
+			}
+			claimed, claimErr := runStore.TryClaimWorkflowIssue(ctx, domain.WorkflowRunRecord{
+				ProjectID:        domain.ProjectID(project.ID),
+				IssueID:          issueID,
+				IssueIdentifier:  issue.ID.Native,
+				WorkflowRevision: workflowConfig.Revision,
+				Attempt:          attempt,
+				UpdatedAt:        o.clock().UTC(),
+			})
+			if claimErr != nil {
+				o.logger.Error("tracker intake: claim workflow issue failed", "project", project.ID, "issue", issueID, "err", claimErr)
+				spawnFailed = true
+				continue
+			}
+			if !claimed {
+				continue
+			}
+		}
+		session, _, _, spawnErr := o.spawner.Spawn(ctx, ports.SpawnConfig{
 			ProjectID: domain.ProjectID(project.ID),
 			IssueID:   issueID,
 			Kind:      domain.KindWorker,
 			Prompt:    prompt,
-		}); err != nil {
-			o.logger.Error("tracker intake: spawn issue session failed", "project", project.ID, "issue", issueID, "err", err)
+		})
+		if spawnErr != nil {
+			if workflowEnabled {
+				attempt := int64(1)
+				due := o.clock().UTC().Add(FailureRetryDelay(attempt, workflowConfig.Config.Agent.MaxRetryBackoff))
+				if _, retryErr := runStore.QueueWorkflowRetry(ctx, domain.WorkflowRunRecord{
+					ProjectID:        domain.ProjectID(project.ID),
+					IssueID:          issueID,
+					WorkflowRevision: workflowConfig.Revision,
+					Attempt:          attempt,
+					RetryDueAt:       due,
+					LastError:        spawnErr.Error(),
+					UpdatedAt:        o.clock().UTC(),
+				}); retryErr != nil {
+					o.logger.Error("tracker intake: queue workflow retry failed", "project", project.ID, "issue", issueID, "err", retryErr)
+				}
+			}
+			o.logger.Error("tracker intake: spawn issue session failed", "project", project.ID, "issue", issueID, "err", spawnErr)
 			spawnFailed = true
 			continue
+		}
+		if workflowEnabled {
+			bound, bindErr := runStore.BindWorkflowIssueSession(ctx, domain.ProjectID(project.ID), issueID, session.ID, o.clock().UTC())
+			if bindErr != nil || !bound {
+				o.logger.Error("tracker intake: bind workflow session failed", "project", project.ID, "issue", issueID, "session", session.ID, "bound", bound, "err", bindErr)
+				spawnFailed = true
+				continue
+			}
 		}
 		seen[issueID] = true
 		if workflowEnabled {
@@ -453,14 +693,14 @@ func normalizedState(state domain.NormalizedIssueState) string {
 	return strings.ToLower(strings.TrimSpace(string(state)))
 }
 
-func renderWorkflowPrompt(candidate workflow.Workflow, issue domain.Issue) (string, error) {
+func renderWorkflowPrompt(candidate workflow.Workflow, issue domain.Issue, attempt int64) (string, error) {
 	description := issue.Body
 	issueURL := issue.URL
 	labels := make([]string, 0, len(issue.Labels))
 	for _, label := range issue.Labels {
 		labels = append(labels, strings.ToLower(strings.TrimSpace(label)))
 	}
-	rendered, err := workflow.RenderPrompt(candidate.Definition.PromptTemplate, workflow.PromptData{
+	data := workflow.PromptData{
 		Issue: workflow.Issue{
 			ID:           issue.ID.Native,
 			Identifier:   issue.ID.Native,
@@ -471,7 +711,12 @@ func renderWorkflowPrompt(candidate workflow.Workflow, issue domain.Issue) (stri
 			Labels:       labels,
 			Dispatchable: true,
 		},
-	})
+	}
+	if attempt > 0 {
+		value := int(attempt)
+		data.Attempt = &value
+	}
+	rendered, err := workflow.RenderPrompt(candidate.Definition.PromptTemplate, data)
 	if err != nil {
 		return "", err
 	}
