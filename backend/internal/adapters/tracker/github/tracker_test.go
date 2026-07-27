@@ -165,13 +165,14 @@ func TestGet_HappyPath(t *testing.T) {
 		t.Fatalf("Get: %v", err)
 	}
 	want := domain.Issue{
-		ID:        domain.TrackerID{Provider: domain.TrackerProviderGitHub, Native: "octocat/hello-world#42"},
-		Title:     "Found a bug",
-		Body:      "It does not work",
-		State:     domain.IssueInProgress, // the "in-progress" label wins over plain "open"
-		URL:       "https://github.com/octocat/hello-world/issues/42",
-		Labels:    []string{"bug", "in-progress"},
-		Assignees: []string{"alice", "bob"},
+		ID:         domain.TrackerID{Provider: domain.TrackerProviderGitHub, Native: "octocat/hello-world#42"},
+		Identifier: "octocat/hello-world#42",
+		Title:      "Found a bug",
+		Body:       "It does not work",
+		State:      domain.IssueInProgress, // the "in-progress" label wins over plain "open"
+		URL:        "https://github.com/octocat/hello-world/issues/42",
+		Labels:     []string{"bug", "in-progress"},
+		Assignees:  []string{"alice", "bob"},
 	}
 	if !reflect.DeepEqual(issue, want) {
 		t.Fatalf("issue = %#v\nwant %#v", issue, want)

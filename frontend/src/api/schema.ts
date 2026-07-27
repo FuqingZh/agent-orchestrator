@@ -1408,7 +1408,7 @@ export interface components {
             assignee?: string;
             enabled?: boolean;
             /** @enum {string} */
-            provider?: "github";
+            provider?: "github" | "linear";
             repo?: string;
             workflowPath?: string;
         };

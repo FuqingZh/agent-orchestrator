@@ -8,7 +8,7 @@ tracker:
     - Symphony
   active_states:
     - Open
-    - In Progress
+    - in_progress
   terminal_states:
     - Done
     - Cancelled

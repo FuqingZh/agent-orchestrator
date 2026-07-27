@@ -1,8 +1,10 @@
 # Symphony compatibility gap design
 
-Status: accepted for phased implementation; phases 0 through 2 are merged in
-pull requests 2 through 4. The private canary credential boundary is delivered
-as phase 2.5 before live acceptance testing.
+Status: accepted for phased implementation; phases 0 through 2.5 are merged.
+Phase 3 Linear support has mock contract coverage and a private-project live
+canary. The canary verified a team-scoped read-only credential, single claim,
+restart recovery, active-state progression, dynamic workflow reload, and
+terminal release.
 
 ## Baseline and intent
 

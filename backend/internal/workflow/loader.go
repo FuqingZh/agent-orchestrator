@@ -343,8 +343,38 @@ func ValidateForDispatch(workflow Workflow, supportedKinds map[string]bool) erro
 	if !supportedKinds[kind] {
 		return errorf(ErrWorkflowValidation, workflow.Path, "tracker.kind %q is not supported", kind)
 	}
+	if err := validateTrackerStates(workflow.Path, "tracker.active_states", workflow.Config.Tracker.ActiveStates); err != nil {
+		return err
+	}
+	if err := validateTrackerStates(workflow.Path, "tracker.terminal_states", workflow.Config.Tracker.TerminalStates); err != nil {
+		return err
+	}
 	if strings.TrimSpace(workflow.Config.Codex.Command) == "" {
 		return errorf(ErrWorkflowValidation, workflow.Path, "codex.command must not be empty")
+	}
+	return nil
+}
+
+var normalizedTrackerStates = map[string]bool{
+	"open":        true,
+	"in_progress": true,
+	"review":      true,
+	"done":        true,
+	"cancelled":   true,
+}
+
+func validateTrackerStates(path, field string, states []string) error {
+	for i, state := range states {
+		if !normalizedTrackerStates[state] {
+			return errorf(
+				ErrWorkflowValidation,
+				path,
+				"%s[%d] %q is not a supported normalized tracker state",
+				field,
+				i,
+				state,
+			)
+		}
 	}
 	return nil
 }

@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 )
@@ -170,6 +171,38 @@ func TestValidateForDispatch(t *testing.T) {
 		t.Fatal("unsupported tracker unexpectedly validated")
 	} else {
 		assertErrorKind(t, err, ErrWorkflowValidation)
+	}
+}
+
+func TestValidateForDispatchRejectsUnknownNormalizedTrackerStates(t *testing.T) {
+	tests := []struct {
+		name   string
+		field  string
+		states []string
+	}{
+		{name: "active", field: "tracker.active_states", states: []string{"open", "in_review"}},
+		{name: "terminal", field: "tracker.terminal_states", states: []string{"done", "closed"}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			candidate := Workflow{
+				Path: "WORKFLOW.md",
+				Config: Config{
+					Tracker: TrackerConfig{Kind: "linear"},
+					Codex:   CodexConfig{Command: DefaultCodexCommand},
+				},
+			}
+			if tt.name == "active" {
+				candidate.Config.Tracker.ActiveStates = tt.states
+			} else {
+				candidate.Config.Tracker.TerminalStates = tt.states
+			}
+			err := ValidateForDispatch(candidate, map[string]bool{"linear": true})
+			assertErrorKind(t, err, ErrWorkflowValidation)
+			if !strings.Contains(err.Error(), tt.field) {
+				t.Fatalf("error = %v, want field %q", err, tt.field)
+			}
+		})
 	}
 }
 

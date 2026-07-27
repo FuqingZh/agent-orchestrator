@@ -3773,6 +3773,7 @@ components:
         provider:
           enum:
           - github
+          - linear
           type: string
         repo:
           type: string

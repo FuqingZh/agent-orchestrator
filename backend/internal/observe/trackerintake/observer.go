@@ -92,6 +92,19 @@ func (s SingleTrackerResolver) Resolve(provider domain.TrackerProvider) (ports.T
 	return nil, fmt.Errorf("tracker intake: no adapter for provider %q", provider)
 }
 
+// MultiTrackerResolver routes each configured provider to its adapter.
+type MultiTrackerResolver map[domain.TrackerProvider]ports.Tracker
+
+// Resolve returns the adapter for a supported workflow provider and rejects
+// unconfigured providers before intake can claim an issue.
+func (m MultiTrackerResolver) Resolve(provider domain.TrackerProvider) (ports.Tracker, error) {
+	adapter := m[provider]
+	if adapter == nil {
+		return nil, fmt.Errorf("tracker intake: no adapter for provider %q", provider)
+	}
+	return adapter, nil
+}
+
 // Config holds optional observer knobs. Zero values use production defaults.
 type Config struct {
 	Tick                time.Duration
@@ -651,7 +664,10 @@ func (o *Observer) workflowForProject(project domain.ProjectRecord, cfg domain.T
 	reloader := o.reloaders[reloaderKey]
 	if reloader == nil {
 		validate := func(candidate workflow.Workflow) error {
-			return workflow.ValidateForDispatch(candidate, map[string]bool{"github": true})
+			return workflow.ValidateForDispatch(candidate, map[string]bool{
+				string(domain.TrackerProviderGitHub): true,
+				string(domain.TrackerProviderLinear): true,
+			})
 		}
 		reloader = workflow.NewReloader(path, o.workflowOpts, validate)
 		o.reloaders[reloaderKey] = reloader
@@ -661,20 +677,28 @@ func (o *Observer) workflowForProject(project domain.ProjectRecord, cfg domain.T
 }
 
 func intakeConfigFromWorkflow(base domain.TrackerIntakeConfig, candidate workflow.Workflow) (domain.TrackerIntakeConfig, error) {
+	base.Provider = domain.TrackerProvider(strings.ToLower(strings.TrimSpace(candidate.Config.Tracker.Kind)))
 	assignee, err := providerString(candidate.Config.Tracker.Provider, "assignee")
 	if err != nil {
 		return base, err
 	}
-	if assignee == "" {
+	if base.Provider == domain.TrackerProviderGitHub && assignee == "" {
 		return base, fmt.Errorf("tracker.provider.assignee is required for GitHub dispatch")
 	}
-	repo, err := providerString(candidate.Config.Tracker.Provider, "repo")
+	scopeKey := "repo"
+	if base.Provider == domain.TrackerProviderLinear {
+		scopeKey = "project"
+	}
+	scope, err := providerString(candidate.Config.Tracker.Provider, scopeKey)
 	if err != nil {
 		return base, err
 	}
+	if base.Provider == domain.TrackerProviderLinear && scope == "" {
+		return base, fmt.Errorf("tracker.provider.project is required for Linear dispatch")
+	}
 	base.Assignee = assignee
-	if repo != "" {
-		base.Repo = repo
+	if scope != "" {
+		base.Repo = scope
 	}
 	return base, nil
 }
@@ -725,10 +749,14 @@ func renderWorkflowPrompt(candidate workflow.Workflow, issue domain.Issue, attem
 	for _, label := range issue.Labels {
 		labels = append(labels, strings.ToLower(strings.TrimSpace(label)))
 	}
+	identifier := strings.TrimSpace(issue.Identifier)
+	if identifier == "" {
+		identifier = issue.ID.Native
+	}
 	data := workflow.PromptData{
 		Issue: workflow.Issue{
 			ID:           issue.ID.Native,
-			Identifier:   issue.ID.Native,
+			Identifier:   identifier,
 			Title:        issue.Title,
 			Description:  &description,
 			State:        normalizedState(issue.State),
@@ -850,14 +878,14 @@ func trackerRepo(project domain.ProjectRecord, cfg domain.TrackerIntakeConfig) (
 	if provider == "" {
 		provider = domain.TrackerProviderGitHub
 	}
-	if provider != domain.TrackerProviderGitHub {
-		return domain.TrackerRepo{}, false
-	}
 	native := strings.TrimSpace(cfg.Repo)
-	if native == "" {
+	if provider == domain.TrackerProviderGitHub && native == "" {
 		native = parseGitHubRepoNative(project.RepoOriginURL)
 	}
 	if native == "" {
+		return domain.TrackerRepo{}, false
+	}
+	if provider != domain.TrackerProviderGitHub && provider != domain.TrackerProviderLinear {
 		return domain.TrackerRepo{}, false
 	}
 	return domain.TrackerRepo{Provider: provider, Native: native}, true

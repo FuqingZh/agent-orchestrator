@@ -10,6 +10,7 @@ import (
 	"time"
 
 	trackergithub "github.com/aoagents/agent-orchestrator/backend/internal/adapters/tracker/github"
+	trackerlinear "github.com/aoagents/agent-orchestrator/backend/internal/adapters/tracker/linear"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	trackerintake "github.com/aoagents/agent-orchestrator/backend/internal/observe/trackerintake"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
@@ -18,17 +19,15 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/storage/sqlite"
 )
 
-// startTrackerIntake wires the opt-in GitHub issue-intake loop. The observer
+// startTrackerIntake wires the opt-in issue-intake loop. The observer
 // always runs — Poll re-reads each project's config on every tick and skips
 // projects with intake disabled, so a project enabling intake after daemon
-// boot is picked up on the next tick without a restart. The adapter itself
-// stays lazy so daemon readiness is not blocked by credential probing or a gh
-// CLI call, and no token is resolved until some enabled project is actually
-// polled.
+// boot is picked up on the next tick without a restart. Provider adapters stay
+// lazy so daemon readiness is not blocked by credential probing.
 func startTrackerIntake(ctx context.Context, store *sqlite.Store, sessions *sessionsvc.Service, logger *slog.Logger) <-chan struct{} {
-	resolver := trackerintake.SingleTrackerResolver{
-		Provider: domain.TrackerProviderGitHub,
-		Adapter:  newLazyGitHubTracker(logger),
+	resolver := trackerintake.MultiTrackerResolver{
+		domain.TrackerProviderGitHub: newLazyGitHubTracker(logger),
+		domain.TrackerProviderLinear: newLazyLinearTracker(logger),
 	}
 	return startTrackerIntakeObserver(ctx, resolver, store, sessions, trackerintake.Config{Logger: logger})
 }
@@ -47,6 +46,63 @@ func startTrackerIntakeObserver(
 	}
 	observer := trackerintake.New(resolver, store, spawner, cfg)
 	return observer.Start(ctx)
+}
+
+// ---------------------------------------------------------------------------
+// Linear lazy adapter (explicit AO-scoped API key or OAuth token)
+// ---------------------------------------------------------------------------
+
+type lazyLinearTracker struct {
+	logger  *slog.Logger
+	mu      sync.Mutex
+	tracker ports.Tracker
+}
+
+func newLazyLinearTracker(logger *slog.Logger) *lazyLinearTracker {
+	return &lazyLinearTracker{logger: logger}
+}
+
+func (t *lazyLinearTracker) Get(ctx context.Context, id domain.TrackerID) (domain.Issue, error) {
+	tracker, err := t.resolve()
+	if err != nil {
+		return domain.Issue{}, err
+	}
+	return tracker.Get(ctx, id)
+}
+
+func (t *lazyLinearTracker) List(ctx context.Context, repo domain.TrackerRepo, filter domain.ListFilter) ([]domain.Issue, error) {
+	tracker, err := t.resolve()
+	if err != nil {
+		return nil, err
+	}
+	return tracker.List(ctx, repo, filter)
+}
+
+func (t *lazyLinearTracker) Preflight(ctx context.Context) error {
+	tracker, err := t.resolve()
+	if err != nil {
+		return err
+	}
+	return tracker.Preflight(ctx)
+}
+
+func (t *lazyLinearTracker) resolve() (ports.Tracker, error) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if t.tracker != nil {
+		return t.tracker, nil
+	}
+	tracker, err := trackerlinear.New(trackerlinear.Options{
+		Authorization: trackerlinear.EnvironmentAuthorizationSource{Getenv: os.Getenv},
+	})
+	if err != nil {
+		if errors.Is(err, trackerlinear.ErrNoCredential) && t.logger != nil {
+			t.logger.Warn("tracker intake disabled: no usable Linear credential", "err", err)
+		}
+		return nil, err
+	}
+	t.tracker = tracker
+	return tracker, nil
 }
 
 // ---------------------------------------------------------------------------

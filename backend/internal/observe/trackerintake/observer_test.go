@@ -835,6 +835,49 @@ func TestTrackerRepoUsesConfiguredRepo(t *testing.T) {
 	}
 }
 
+func TestPollWorkflowRoutesLinearProjectAndRendersIdentifier(t *testing.T) {
+	projectPath := t.TempDir()
+	writeIntakeWorkflow(t, projectPath, `---
+tracker:
+  kind: linear
+  provider:
+    project: project-uuid
+  required_labels: [agent]
+---
+Implement {{ issue.identifier }}: {{ issue.title }}
+`)
+	project := workflowProject("linear-demo", projectPath)
+	tracker := &fakeTracker{issues: []domain.Issue{{
+		ID:         domain.TrackerID{Provider: domain.TrackerProviderLinear, Native: "issue-uuid"},
+		Identifier: "FUQ-12",
+		Title:      "Ship the service",
+		State:      domain.IssueOpen,
+		Labels:     []string{"agent"},
+	}}}
+	store := &fakeStore{projects: []domain.ProjectRecord{project}}
+	spawner := &fakeSpawner{}
+	observer := New(MultiTrackerResolver{
+		domain.TrackerProviderLinear: tracker,
+	}, store, spawner, Config{Logger: discardLogger()})
+
+	if err := observer.Poll(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if len(tracker.repos) != 1 || tracker.repos[0] != (domain.TrackerRepo{
+		Provider: domain.TrackerProviderLinear,
+		Native:   "project-uuid",
+	}) {
+		t.Fatalf("repos = %#v", tracker.repos)
+	}
+	if len(spawner.calls) != 1 {
+		t.Fatalf("spawn calls = %#v", spawner.calls)
+	}
+	call := spawner.calls[0]
+	if call.IssueID != "linear:issue-uuid" || call.Prompt != "Implement FUQ-12: Ship the service" {
+		t.Fatalf("spawn call = %#v", call)
+	}
+}
+
 func singleResolver(tracker ports.Tracker) TrackerResolver {
 	return SingleTrackerResolver{Provider: domain.TrackerProviderGitHub, Adapter: tracker}
 }
