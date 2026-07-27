@@ -135,7 +135,7 @@ type execRunner struct{}
 
 func (execRunner) Run(ctx context.Context, env []string, name string, args ...string) ([]byte, error) {
 	cmd := exec.CommandContext(ctx, name, args...)
-	cmd.Env = append(append([]string(nil), os.Environ()...), env...)
+	cmd.Env = tmuxProcessEnv(append(append([]string(nil), os.Environ()...), env...))
 	return cmd.CombinedOutput()
 }
 
@@ -534,7 +534,7 @@ func (r *Runtime) attachCommand(handle ports.RuntimeHandle) ([]string, error) {
 }
 
 func attachEnv(base []string) []string {
-	env := append([]string(nil), base...)
+	env := tmuxProcessEnv(base)
 	hasTerm := false
 	hasColorTerm := false
 	for i, kv := range env {
@@ -552,6 +552,24 @@ func attachEnv(base []string) []string {
 	}
 	if !hasColorTerm {
 		env = append(env, "COLORTERM=truecolor")
+	}
+	return env
+}
+
+// tmuxProcessEnv prevents daemon-only Linear credentials from reaching tmux
+// clients or a newly created tmux server. The server environment becomes the
+// ambient environment for every worker pane, so filtering only worker launch
+// configuration would be too late.
+func tmuxProcessEnv(base []string) []string {
+	env := make([]string, 0, len(base))
+	for _, entry := range base {
+		key, _, _ := strings.Cut(entry, "=")
+		switch key {
+		case "AO_LINEAR_API_KEY", "AO_LINEAR_OAUTH_TOKEN":
+			continue
+		default:
+			env = append(env, entry)
+		}
 	}
 	return env
 }

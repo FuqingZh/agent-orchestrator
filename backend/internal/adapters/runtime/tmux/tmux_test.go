@@ -932,7 +932,14 @@ func TestAttachCommandRejectsInvalidHandle(t *testing.T) {
 }
 
 func TestAttachEnvForcesUsableTerm(t *testing.T) {
-	env := attachEnv([]string{"PATH=/bin", "TERM=dumb", "COLORTERM=ansi", "SHELL=/bin/sh"})
+	env := attachEnv([]string{
+		"PATH=/bin",
+		"TERM=dumb",
+		"COLORTERM=ansi",
+		"SHELL=/bin/sh",
+		"AO_LINEAR_API_KEY=secret",
+		"AO_LINEAR_OAUTH_TOKEN=oauth-secret",
+	})
 	if got, want := env, []string{"PATH=/bin", "TERM=xterm-256color", "COLORTERM=truecolor", "SHELL=/bin/sh"}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("attachEnv = %#v, want %#v", got, want)
 	}
@@ -940,6 +947,23 @@ func TestAttachEnvForcesUsableTerm(t *testing.T) {
 	env = attachEnv([]string{"PATH=/bin"})
 	if got, want := env, []string{"PATH=/bin", "TERM=xterm-256color", "COLORTERM=truecolor"}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("attachEnv without TERM = %#v, want %#v", got, want)
+	}
+}
+
+func TestTmuxProcessEnvStripsLinearCredentials(t *testing.T) {
+	base := []string{
+		"PATH=/bin",
+		"AO_LINEAR_API_KEY=secret",
+		"EMPTY=",
+		"AO_LINEAR_OAUTH_TOKEN=oauth-secret",
+		"SHELL=/bin/sh",
+	}
+	want := []string{"PATH=/bin", "EMPTY=", "SHELL=/bin/sh"}
+	if got := tmuxProcessEnv(base); !reflect.DeepEqual(got, want) {
+		t.Fatalf("tmuxProcessEnv = %#v, want %#v", got, want)
+	}
+	if got := tmuxProcessEnv(nil); got == nil || len(got) != 0 {
+		t.Fatalf("tmuxProcessEnv(nil) = %#v, want non-nil empty slice", got)
 	}
 }
 

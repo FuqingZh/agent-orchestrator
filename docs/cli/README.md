@@ -137,6 +137,12 @@ through a Symphony workflow and requires `tracker.provider.project` to name a
 Linear project UUID. The daemon reads tracker state; tracker writes remain
 agent-owned.
 
+Before invoking tmux, AO removes both Linear credential variables from the
+tmux process environment. This prevents a newly created tmux server from
+automatically forwarding daemon credentials into worker panes. It is an
+inheritance guard, not operating-system isolation from a permissionless worker
+running as the same user.
+
 `tracker.active_states` and `tracker.terminal_states` use AO's normalized
 cross-provider vocabulary: `open`, `in_progress`, `review`, `done`, and
 `cancelled`. Workflow dispatch validation rejects other values; in particular,
