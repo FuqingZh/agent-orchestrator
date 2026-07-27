@@ -13,7 +13,6 @@ import (
 	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
-	"github.com/aoagents/agent-orchestrator/backend/internal/observe"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 	"github.com/aoagents/agent-orchestrator/backend/internal/workflow"
 )
@@ -96,6 +95,7 @@ type Observer struct {
 	maxWorkflow    int
 	workflowOpts   workflow.Options
 	reloaders      map[string]*workflow.Reloader
+	nextInterval   time.Duration
 }
 
 // New constructs an Observer with safe defaults.
@@ -132,9 +132,26 @@ func New(resolver TrackerResolver, store Store, spawner Spawner, cfg Config) *Ob
 }
 
 // Start launches the observer loop. The first poll runs immediately inside the
-// goroutine, keeping daemon startup non-blocking.
+// goroutine, keeping daemon startup non-blocking. Later polls use the fastest
+// active workflow interval, while legacy intake keeps the daemon fallback.
 func (o *Observer) Start(ctx context.Context) <-chan struct{} {
-	return observe.StartPollLoop(ctx, o.tick, o.Poll, o.logger, "tracker intake")
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for {
+			if err := o.Poll(ctx); err != nil && ctx.Err() == nil {
+				o.logger.Error("tracker intake: poll failed", "err", err)
+			}
+			timer := time.NewTimer(o.effectiveTick())
+			select {
+			case <-ctx.Done():
+				timer.Stop()
+				return
+			case <-timer.C:
+			}
+		}
+	}()
+	return done
 }
 
 // Poll runs one synchronous intake pass. Store discovery failures are returned
@@ -159,6 +176,7 @@ func (o *Observer) Poll(ctx context.Context) error {
 			enabledProjects = append(enabledProjects, project)
 		}
 	}
+	o.nextInterval = 0
 	if len(enabledProjects) == 0 {
 		return nil
 	}
@@ -185,6 +203,19 @@ func (o *Observer) Poll(ctx context.Context) error {
 	return nil
 }
 
+func (o *Observer) includeInterval(interval time.Duration) {
+	if interval > 0 && (o.nextInterval == 0 || interval < o.nextInterval) {
+		o.nextInterval = interval
+	}
+}
+
+func (o *Observer) effectiveTick() time.Duration {
+	if o.nextInterval > 0 {
+		return o.nextInterval
+	}
+	return o.tick
+}
+
 // pollProject returns failed=true for conditions that should be retried after a
 // backoff window rather than logged on every poll.
 func (o *Observer) pollProject(ctx context.Context, project domain.ProjectRecord, seen map[domain.IssueID]bool, budget *dispatchBudget) (failed bool) {
@@ -200,10 +231,12 @@ func (o *Observer) pollProject(ctx context.Context, project domain.ProjectRecord
 	if workflowErr != nil {
 		o.logger.Warn("tracker intake: workflow reload failed", "project", project.ID, "err", workflowErr)
 		if !workflowEnabled {
+			o.includeInterval(o.tick)
 			return true
 		}
 	}
 	if workflowEnabled {
+		o.includeInterval(workflowConfig.Config.Polling.Interval)
 		var err error
 		cfg, err = intakeConfigFromWorkflow(cfg, workflowConfig)
 		if err != nil {
@@ -213,6 +246,8 @@ func (o *Observer) pollProject(ctx context.Context, project domain.ProjectRecord
 		if !budget.projectSlotAvailable(project.ID, workflowConfig.Config.Agent.MaxConcurrentAgents) {
 			return false
 		}
+	} else {
+		o.includeInterval(o.tick)
 	}
 	repo, ok := trackerRepo(project, cfg)
 	if !ok {

@@ -125,6 +125,41 @@ agent:
 	}
 }
 
+func TestStartAppliesWorkflowPollingInterval(t *testing.T) {
+	projectPath := t.TempDir()
+	writeIntakeWorkflow(t, projectPath, `---
+tracker:
+  kind: github
+  provider:
+    assignee: alice
+polling:
+  interval_ms: 10
+---
+{{ issue.identifier }}
+`)
+	tracker := &pollSignalTracker{calls: make(chan struct{}, 3)}
+	observer := New(
+		singleResolver(tracker),
+		&fakeStore{projects: []domain.ProjectRecord{workflowProject("demo", projectPath)}},
+		&fakeSpawner{},
+		Config{Tick: time.Hour, Logger: discardLogger()},
+	)
+	ctx, cancel := context.WithCancel(context.Background())
+	done := observer.Start(ctx)
+	t.Cleanup(func() {
+		cancel()
+		<-done
+	})
+
+	for call := 1; call <= 2; call++ {
+		select {
+		case <-tracker.calls:
+		case <-time.After(500 * time.Millisecond):
+			t.Fatalf("tracker list call %d did not use workflow polling interval", call)
+		}
+	}
+}
+
 func TestPollWorkflowCountsExistingSessionsAgainstLimits(t *testing.T) {
 	projectPath := t.TempDir()
 	writeIntakeWorkflow(t, projectPath, `---
@@ -570,6 +605,21 @@ func (f *fakeTracker) List(_ context.Context, repo domain.TrackerRepo, filter do
 }
 
 func (f *fakeTracker) Preflight(context.Context) error { return nil }
+
+type pollSignalTracker struct {
+	calls chan struct{}
+}
+
+func (p *pollSignalTracker) Get(context.Context, domain.TrackerID) (domain.Issue, error) {
+	return domain.Issue{}, errors.New("issue not found")
+}
+
+func (p *pollSignalTracker) List(context.Context, domain.TrackerRepo, domain.ListFilter) ([]domain.Issue, error) {
+	p.calls <- struct{}{}
+	return nil, nil
+}
+
+func (p *pollSignalTracker) Preflight(context.Context) error { return nil }
 
 type fakeSpawner struct {
 	calls     []ports.SpawnConfig
