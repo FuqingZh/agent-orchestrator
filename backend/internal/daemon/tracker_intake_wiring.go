@@ -29,7 +29,17 @@ func startTrackerIntake(ctx context.Context, store *sqlite.Store, sessions *sess
 		Provider: domain.TrackerProviderGitHub,
 		Adapter:  newLazyGitHubTracker(logger),
 	}
-	observer := trackerintake.New(resolver, store, sessions, trackerintake.Config{Logger: logger})
+	return startTrackerIntakeObserver(ctx, resolver, store, sessions, trackerintake.Config{Logger: logger})
+}
+
+func startTrackerIntakeObserver(
+	ctx context.Context,
+	resolver trackerintake.TrackerResolver,
+	store trackerintake.Store,
+	spawner trackerintake.Spawner,
+	cfg trackerintake.Config,
+) <-chan struct{} {
+	observer := trackerintake.New(resolver, store, spawner, cfg)
 	return observer.Start(ctx)
 }
 

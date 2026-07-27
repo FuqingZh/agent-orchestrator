@@ -8,12 +8,13 @@ import (
 	"fmt"
 	"log/slog"
 	"net/url"
+	"path/filepath"
 	"strings"
 	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
-	"github.com/aoagents/agent-orchestrator/backend/internal/observe"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
+	"github.com/aoagents/agent-orchestrator/backend/internal/workflow"
 )
 
 const (
@@ -23,6 +24,9 @@ const (
 	// DefaultFailureBackoff suppresses repeated polls for a project after an
 	// intake failure. The observer retries automatically after this window.
 	DefaultFailureBackoff = 5 * time.Minute
+	// DefaultMaxWorkflowSessions bounds sessions spawned by the Symphony lane
+	// across all projects. Legacy tracker intake remains unchanged.
+	DefaultMaxWorkflowSessions = 10
 	// maxIntakePromptLen mirrors the session HTTP prompt limit. Intake uses the
 	// session service directly, so it must enforce the same boundary itself.
 	maxIntakePromptLen = 4096
@@ -70,10 +74,12 @@ func (s SingleTrackerResolver) Resolve(provider domain.TrackerProvider) (ports.T
 
 // Config holds optional observer knobs. Zero values use production defaults.
 type Config struct {
-	Tick           time.Duration
-	FailureBackoff time.Duration
-	Clock          func() time.Time
-	Logger         *slog.Logger
+	Tick                time.Duration
+	FailureBackoff      time.Duration
+	MaxWorkflowSessions int
+	WorkflowOptions     workflow.Options
+	Clock               func() time.Time
+	Logger              *slog.Logger
 }
 
 // Observer polls configured projects and starts sessions for eligible issues.
@@ -86,16 +92,35 @@ type Observer struct {
 	clock          func() time.Time
 	logger         *slog.Logger
 	backoffUntil   map[string]time.Time
+	maxWorkflow    int
+	workflowOpts   workflow.Options
+	reloaders      map[string]*workflow.Reloader
+	nextInterval   time.Duration
 }
 
 // New constructs an Observer with safe defaults.
 func New(resolver TrackerResolver, store Store, spawner Spawner, cfg Config) *Observer {
-	o := &Observer{resolver: resolver, store: store, spawner: spawner, tick: cfg.Tick, failureBackoff: cfg.FailureBackoff, clock: cfg.Clock, logger: cfg.Logger, backoffUntil: map[string]time.Time{}}
+	o := &Observer{
+		resolver:       resolver,
+		store:          store,
+		spawner:        spawner,
+		tick:           cfg.Tick,
+		failureBackoff: cfg.FailureBackoff,
+		maxWorkflow:    cfg.MaxWorkflowSessions,
+		workflowOpts:   cfg.WorkflowOptions,
+		clock:          cfg.Clock,
+		logger:         cfg.Logger,
+		backoffUntil:   map[string]time.Time{},
+		reloaders:      map[string]*workflow.Reloader{},
+	}
 	if o.tick <= 0 {
 		o.tick = DefaultTickInterval
 	}
 	if o.failureBackoff <= 0 {
 		o.failureBackoff = DefaultFailureBackoff
+	}
+	if o.maxWorkflow <= 0 {
+		o.maxWorkflow = DefaultMaxWorkflowSessions
 	}
 	if o.clock == nil {
 		o.clock = time.Now
@@ -107,9 +132,26 @@ func New(resolver TrackerResolver, store Store, spawner Spawner, cfg Config) *Ob
 }
 
 // Start launches the observer loop. The first poll runs immediately inside the
-// goroutine, keeping daemon startup non-blocking.
+// goroutine, keeping daemon startup non-blocking. Later polls use the fastest
+// active workflow interval, while legacy intake keeps the daemon fallback.
 func (o *Observer) Start(ctx context.Context) <-chan struct{} {
-	return observe.StartPollLoop(ctx, o.tick, o.Poll, o.logger, "tracker intake")
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for {
+			if err := o.Poll(ctx); err != nil && ctx.Err() == nil {
+				o.logger.Error("tracker intake: poll failed", "err", err)
+			}
+			timer := time.NewTimer(o.effectiveTick())
+			select {
+			case <-ctx.Done():
+				timer.Stop()
+				return
+			case <-timer.C:
+			}
+		}
+	}()
+	return done
 }
 
 // Poll runs one synchronous intake pass. Store discovery failures are returned
@@ -134,6 +176,7 @@ func (o *Observer) Poll(ctx context.Context) error {
 			enabledProjects = append(enabledProjects, project)
 		}
 	}
+	o.nextInterval = 0
 	if len(enabledProjects) == 0 {
 		return nil
 	}
@@ -142,6 +185,7 @@ func (o *Observer) Poll(ctx context.Context) error {
 		return err
 	}
 	seen := seenIssueIDs(sessions)
+	budget := newDispatchBudget(enabledProjects, sessions, o.maxWorkflow)
 	for _, project := range enabledProjects {
 		if err := ctx.Err(); err != nil {
 			return err
@@ -150,7 +194,7 @@ func (o *Observer) Poll(ctx context.Context) error {
 			o.logger.Debug("tracker intake: project in failure backoff", "project", project.ID, "until", until)
 			continue
 		}
-		if failed := o.pollProject(ctx, project, seen); failed {
+		if failed := o.pollProject(ctx, project, seen, budget); failed {
 			o.backoffUntil[project.ID] = now.Add(o.failureBackoff)
 		} else {
 			delete(o.backoffUntil, project.ID)
@@ -159,9 +203,22 @@ func (o *Observer) Poll(ctx context.Context) error {
 	return nil
 }
 
+func (o *Observer) includeInterval(interval time.Duration) {
+	if interval > 0 && (o.nextInterval == 0 || interval < o.nextInterval) {
+		o.nextInterval = interval
+	}
+}
+
+func (o *Observer) effectiveTick() time.Duration {
+	if o.nextInterval > 0 {
+		return o.nextInterval
+	}
+	return o.tick
+}
+
 // pollProject returns failed=true for conditions that should be retried after a
 // backoff window rather than logged on every poll.
-func (o *Observer) pollProject(ctx context.Context, project domain.ProjectRecord, seen map[domain.IssueID]bool) (failed bool) {
+func (o *Observer) pollProject(ctx context.Context, project domain.ProjectRecord, seen map[domain.IssueID]bool, budget *dispatchBudget) (failed bool) {
 	cfg := project.Config.TrackerIntake.WithDefaults()
 	if !cfg.Enabled {
 		return false
@@ -169,6 +226,28 @@ func (o *Observer) pollProject(ctx context.Context, project domain.ProjectRecord
 	if err := cfg.Validate(); err != nil {
 		o.logger.Warn("tracker intake: skipping project with invalid config", "project", project.ID, "err", err)
 		return true
+	}
+	workflowConfig, workflowEnabled, workflowErr := o.workflowForProject(project, cfg)
+	if workflowErr != nil {
+		o.logger.Warn("tracker intake: workflow reload failed", "project", project.ID, "err", workflowErr)
+		if !workflowEnabled {
+			o.includeInterval(o.tick)
+			return true
+		}
+	}
+	if workflowEnabled {
+		o.includeInterval(workflowConfig.Config.Polling.Interval)
+		var err error
+		cfg, err = intakeConfigFromWorkflow(cfg, workflowConfig)
+		if err != nil {
+			o.logger.Warn("tracker intake: invalid GitHub workflow profile", "project", project.ID, "err", err)
+			return true
+		}
+		if !budget.projectSlotAvailable(project.ID, workflowConfig.Config.Agent.MaxConcurrentAgents) {
+			return false
+		}
+	} else {
+		o.includeInterval(o.tick)
 	}
 	repo, ok := trackerRepo(project, cfg)
 	if !ok {
@@ -182,6 +261,7 @@ func (o *Observer) pollProject(ctx context.Context, project domain.ProjectRecord
 	}
 	issues, err := tracker.List(ctx, repo, domain.ListFilter{
 		State:    domain.ListOpen,
+		Labels:   workflowLabels(workflowConfig, workflowEnabled),
 		Assignee: cfg.Assignee,
 	})
 	if err != nil {
@@ -193,29 +273,209 @@ func (o *Observer) pollProject(ctx context.Context, project domain.ProjectRecord
 		if ctx.Err() != nil {
 			return true
 		}
-		if issue.State != domain.IssueOpen {
+		if !issueMatchesConfig(issue, cfg) {
 			continue
 		}
-		if !issueMatchesConfig(issue, cfg) {
+		if workflowEnabled {
+			state := normalizedState(issue.State)
+			if !workflowIssueEligible(issue, workflowConfig) {
+				continue
+			}
+			if !budget.slotAvailable(project.ID, state, workflowConfig.Config.Agent) {
+				continue
+			}
+		} else if issue.State != domain.IssueOpen {
 			continue
 		}
 		issueID := CanonicalIssueID(issue.ID)
 		if issueID == "" || seen[issueID] {
 			continue
 		}
+		prompt := BuildIssuePrompt(issue)
+		if workflowEnabled {
+			prompt, err = renderWorkflowPrompt(workflowConfig, issue)
+			if err != nil {
+				o.logger.Error("tracker intake: render workflow prompt failed", "project", project.ID, "issue", issueID, "err", err)
+				spawnFailed = true
+				continue
+			}
+		}
 		if _, _, _, err := o.spawner.Spawn(ctx, ports.SpawnConfig{
 			ProjectID: domain.ProjectID(project.ID),
 			IssueID:   issueID,
 			Kind:      domain.KindWorker,
-			Prompt:    BuildIssuePrompt(issue),
+			Prompt:    prompt,
 		}); err != nil {
 			o.logger.Error("tracker intake: spawn issue session failed", "project", project.ID, "issue", issueID, "err", err)
 			spawnFailed = true
 			continue
 		}
 		seen[issueID] = true
+		if workflowEnabled {
+			budget.recordSpawn(project.ID, normalizedState(issue.State))
+		}
 	}
 	return spawnFailed
+}
+
+type dispatchBudget struct {
+	globalLimit   int
+	globalActive  int
+	projectActive map[string]int
+	stateSpawned  map[string]map[string]int
+}
+
+func newDispatchBudget(projects []domain.ProjectRecord, sessions []domain.SessionRecord, globalLimit int) *dispatchBudget {
+	workflowProjects := make(map[string]bool)
+	for _, project := range projects {
+		cfg := project.Config.TrackerIntake
+		if cfg.Enabled && cfg.WorkflowPath != "" {
+			workflowProjects[project.ID] = true
+		}
+	}
+	budget := &dispatchBudget{
+		globalLimit:   globalLimit,
+		projectActive: make(map[string]int),
+		stateSpawned:  make(map[string]map[string]int),
+	}
+	for _, session := range sessions {
+		projectID := string(session.ProjectID)
+		if session.IsTerminated || session.IssueID == "" || !workflowProjects[projectID] {
+			continue
+		}
+		budget.globalActive++
+		budget.projectActive[projectID]++
+	}
+	return budget
+}
+
+func (b *dispatchBudget) projectSlotAvailable(projectID string, projectLimit int) bool {
+	return b.globalActive < b.globalLimit && b.projectActive[projectID] < projectLimit
+}
+
+func (b *dispatchBudget) slotAvailable(projectID, state string, cfg workflow.AgentConfig) bool {
+	if !b.projectSlotAvailable(projectID, cfg.MaxConcurrentAgents) {
+		return false
+	}
+	limit, limited := cfg.MaxConcurrentAgentsByState[state]
+	if !limited {
+		return true
+	}
+	return b.stateSpawned[projectID][state] < limit
+}
+
+func (b *dispatchBudget) recordSpawn(projectID, state string) {
+	b.globalActive++
+	b.projectActive[projectID]++
+	if b.stateSpawned[projectID] == nil {
+		b.stateSpawned[projectID] = make(map[string]int)
+	}
+	b.stateSpawned[projectID][state]++
+}
+
+func (o *Observer) workflowForProject(project domain.ProjectRecord, cfg domain.TrackerIntakeConfig) (workflow.Workflow, bool, error) {
+	if cfg.WorkflowPath == "" {
+		return workflow.Workflow{}, false, nil
+	}
+	path := filepath.Join(project.Path, cfg.WorkflowPath)
+	relative, err := filepath.Rel(project.Path, path)
+	if err != nil || relative == ".." || strings.HasPrefix(relative, ".."+string(filepath.Separator)) {
+		return workflow.Workflow{}, false, fmt.Errorf("tracker intake: workflow path escapes project root")
+	}
+	reloaderKey := project.ID + "\x00" + path
+	reloader := o.reloaders[reloaderKey]
+	if reloader == nil {
+		validate := func(candidate workflow.Workflow) error {
+			return workflow.ValidateForDispatch(candidate, map[string]bool{"github": true})
+		}
+		reloader = workflow.NewReloader(path, o.workflowOpts, validate)
+		o.reloaders[reloaderKey] = reloader
+	}
+	candidate, _, err := reloader.Reload()
+	return candidate, candidate.Revision != "", err
+}
+
+func intakeConfigFromWorkflow(base domain.TrackerIntakeConfig, candidate workflow.Workflow) (domain.TrackerIntakeConfig, error) {
+	assignee, err := providerString(candidate.Config.Tracker.Provider, "assignee")
+	if err != nil {
+		return base, err
+	}
+	if assignee == "" {
+		return base, fmt.Errorf("tracker.provider.assignee is required for GitHub dispatch")
+	}
+	repo, err := providerString(candidate.Config.Tracker.Provider, "repo")
+	if err != nil {
+		return base, err
+	}
+	base.Assignee = assignee
+	if repo != "" {
+		base.Repo = repo
+	}
+	return base, nil
+}
+
+func providerString(provider map[string]any, key string) (string, error) {
+	value, ok := provider[key]
+	if !ok || value == nil {
+		return "", nil
+	}
+	text, ok := value.(string)
+	if !ok {
+		return "", fmt.Errorf("tracker.provider.%s must be a string", key)
+	}
+	return strings.TrimSpace(text), nil
+}
+
+func workflowLabels(candidate workflow.Workflow, enabled bool) []string {
+	if !enabled {
+		return nil
+	}
+	return candidate.Config.Tracker.RequiredLabels
+}
+
+func workflowIssueEligible(issue domain.Issue, candidate workflow.Workflow) bool {
+	active := candidate.Config.Tracker.ActiveStates
+	if len(active) == 0 {
+		active = []string{string(domain.IssueOpen)}
+	}
+	if !containsFold(active, normalizedState(issue.State)) {
+		return false
+	}
+	for _, required := range candidate.Config.Tracker.RequiredLabels {
+		if strings.TrimSpace(required) == "" || !containsFold(issue.Labels, required) {
+			return false
+		}
+	}
+	return true
+}
+
+func normalizedState(state domain.NormalizedIssueState) string {
+	return strings.ToLower(strings.TrimSpace(string(state)))
+}
+
+func renderWorkflowPrompt(candidate workflow.Workflow, issue domain.Issue) (string, error) {
+	description := issue.Body
+	issueURL := issue.URL
+	labels := make([]string, 0, len(issue.Labels))
+	for _, label := range issue.Labels {
+		labels = append(labels, strings.ToLower(strings.TrimSpace(label)))
+	}
+	rendered, err := workflow.RenderPrompt(candidate.Definition.PromptTemplate, workflow.PromptData{
+		Issue: workflow.Issue{
+			ID:           issue.ID.Native,
+			Identifier:   issue.ID.Native,
+			Title:        issue.Title,
+			Description:  &description,
+			State:        normalizedState(issue.State),
+			URL:          &issueURL,
+			Labels:       labels,
+			Dispatchable: true,
+		},
+	})
+	if err != nil {
+		return "", err
+	}
+	return capIntakePrompt(rendered), nil
 }
 
 func issueMatchesConfig(issue domain.Issue, cfg domain.TrackerIntakeConfig) bool {

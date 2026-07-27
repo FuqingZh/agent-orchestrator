@@ -91,6 +91,9 @@ type TrackerIntakeConfig struct {
 	// Assignee narrows eligible issues to one assignee. Provider-specific values
 	// such as "*" are passed through unchanged.
 	Assignee string `json:"assignee,omitempty"`
+	// WorkflowPath opts this project into the Symphony workflow lane. It is
+	// repository-relative; an empty value preserves the legacy intake path.
+	WorkflowPath string `json:"workflowPath,omitempty"`
 }
 
 // WithDefaults fills the provider only when intake is enabled. Disabled intake
@@ -117,7 +120,7 @@ func (c TrackerIntakeConfig) Validate() error {
 	if err := validateNoWhitespaceField("trackerIntake.assignee", c.Assignee); err != nil {
 		return err
 	}
-	if strings.TrimSpace(c.Assignee) == "" {
+	if strings.TrimSpace(c.Assignee) == "" && c.WorkflowPath == "" {
 		return fmt.Errorf("trackerIntake: assignee is required when enabled")
 	}
 	return nil

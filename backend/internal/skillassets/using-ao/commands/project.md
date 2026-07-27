@@ -151,6 +151,10 @@ ao project set-config <id> [flags]
 | `--post-create stringArray` | Command to run after workspace creation (repeatable) | - |
 | `--session-prefix string` | Displayed session-id prefix | - |
 | `--symlink stringArray` | Repo-relative path to symlink into workspaces (repeatable) | - |
+| `--tracker-assignee string` | GitHub assignee required by legacy intake | - |
+| `--tracker-intake` | Enable GitHub issue intake | - |
+| `--tracker-repo string` | GitHub `owner/repo`; defaults to the registered origin | - |
+| `--tracker-workflow string` | Repo-relative Symphony `WORKFLOW.md` path | - |
 | `--worker-agent string` | Harness override for worker sessions | - |
 
 **Examples:**
@@ -173,4 +177,9 @@ ao project set-config agent-orchestrator --agent-rules "Run focused tests before
 ```bash
 # Load worker rules from a repo-relative file
 ao project set-config agent-orchestrator --agent-rules-file docs/ao-worker-rules.md
+```
+
+```bash
+# Opt into workflow-driven GitHub issue intake
+ao project set-config agent-orchestrator --tracker-intake --tracker-workflow WORKFLOW.md
 ```

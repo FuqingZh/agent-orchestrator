@@ -81,6 +81,26 @@ func TestProjectSetConfig_TrackerIntakeJSON(t *testing.T) {
 	}
 }
 
+func TestProjectSetConfig_TrackerWorkflowFlag(t *testing.T) {
+	cfg := setConfigEnv(t)
+	srv, capture := projectServer(t, http.StatusOK, `{"project":{"id":"demo","path":"/repo/demo"}}`)
+	writeRunFileFor(t, cfg, srv)
+
+	_, errOut, err := executeCLI(t, Deps{
+		ProcessAlive: func(int) bool { return true },
+	}, "project", "set-config", "demo", "--tracker-intake", "--tracker-workflow", "WORKFLOW.md")
+	if err != nil {
+		t.Fatalf("unexpected error: %v\nstderr=%s", err, errOut)
+	}
+	var got setConfigRequest
+	if err := json.Unmarshal(capture.body, &got); err != nil {
+		t.Fatalf("decode request: %v\nbody=%s", err, capture.body)
+	}
+	if !got.Config.TrackerIntake.Enabled || got.Config.TrackerIntake.Provider != "github" || got.Config.TrackerIntake.WorkflowPath != "WORKFLOW.md" {
+		t.Fatalf("tracker workflow request = %#v", got.Config.TrackerIntake)
+	}
+}
+
 func TestBuildProjectConfigTrackerIntakeFlags(t *testing.T) {
 	got, err := buildProjectConfig(projectSetConfigOptions{
 		trackerIntake:   true,
@@ -92,6 +112,19 @@ func TestBuildProjectConfigTrackerIntakeFlags(t *testing.T) {
 	}
 	if !got.TrackerIntake.Enabled || got.TrackerIntake.Provider != "github" || got.TrackerIntake.Repo != "acme/demo" || got.TrackerIntake.Assignee != "alice" {
 		t.Fatalf("tracker intake config = %#v", got.TrackerIntake)
+	}
+}
+
+func TestBuildProjectConfigTrackerWorkflowFlag(t *testing.T) {
+	got, err := buildProjectConfig(projectSetConfigOptions{
+		trackerIntake:   true,
+		trackerWorkflow: "WORKFLOW.md",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !got.TrackerIntake.Enabled || got.TrackerIntake.Provider != "github" || got.TrackerIntake.WorkflowPath != "WORKFLOW.md" {
+		t.Fatalf("tracker workflow config = %#v", got.TrackerIntake)
 	}
 }
 

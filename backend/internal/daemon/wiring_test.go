@@ -5,6 +5,8 @@ import (
 	"errors"
 	"io"
 	"log/slog"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"sync"
@@ -15,10 +17,12 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/runtime/runtimeselect"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/runtime/tmux"
 	telemetryadapter "github.com/aoagents/agent-orchestrator/backend/internal/adapters/telemetry"
+	trackergithub "github.com/aoagents/agent-orchestrator/backend/internal/adapters/tracker/github"
 	"github.com/aoagents/agent-orchestrator/backend/internal/cdc"
 	"github.com/aoagents/agent-orchestrator/backend/internal/config"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/lifecycle"
+	trackerintake "github.com/aoagents/agent-orchestrator/backend/internal/observe/trackerintake"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 	projectsvc "github.com/aoagents/agent-orchestrator/backend/internal/service/project"
 	sessionmanager "github.com/aoagents/agent-orchestrator/backend/internal/session_manager"
@@ -381,6 +385,103 @@ func TestStartTrackerIntake_RunsEvenWithoutEnabledProjects(t *testing.T) {
 	case <-time.After(2 * time.Second):
 		t.Fatal("observer did not stop after context cancellation")
 	}
+}
+
+func TestStartTrackerIntake_MockGitHubWorkflowSmoke(t *testing.T) {
+	projectPath := t.TempDir()
+	workflow := `---
+tracker:
+  kind: github
+  provider:
+    repo: acme/demo
+    assignee: alice
+  required_labels: [symphony]
+---
+Implement {{ issue.identifier }}: {{ issue.title }}
+`
+	if err := os.WriteFile(filepath.Join(projectPath, "WORKFLOW.md"), []byte(workflow), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	store, err := sqlite.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	if err := store.UpsertProject(context.Background(), domain.ProjectRecord{
+		ID:            "demo",
+		Path:          projectPath,
+		RepoOriginURL: "https://github.com/acme/demo.git",
+		Config: domain.ProjectConfig{TrackerIntake: domain.TrackerIntakeConfig{
+			Enabled:      true,
+			WorkflowPath: "WORKFLOW.md",
+		}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/repos/acme/demo/issues" {
+			t.Errorf("GitHub path = %q", r.URL.Path)
+			http.NotFound(w, r)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `[{
+			"number": 7,
+			"title": "daemon smoke",
+			"body": "exercise the real adapter",
+			"state": "open",
+			"html_url": "https://github.com/acme/demo/issues/7",
+			"labels": [{"name":"symphony"}],
+			"assignees": [{"login":"alice"}]
+		}]`)
+	}))
+	t.Cleanup(server.Close)
+	tracker, err := trackergithub.New(trackergithub.Options{
+		Token:      trackergithub.StaticTokenSource("test-token"),
+		BaseURL:    server.URL,
+		HTTPClient: server.Client(),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	spawner := &trackerIntakeSmokeSpawner{calls: make(chan ports.SpawnConfig, 1)}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := startTrackerIntakeObserver(
+		ctx,
+		trackerintake.SingleTrackerResolver{Provider: domain.TrackerProviderGitHub, Adapter: tracker},
+		store,
+		spawner,
+		trackerintake.Config{Tick: time.Hour, Logger: slog.New(slog.NewTextHandler(io.Discard, nil))},
+	)
+	t.Cleanup(func() {
+		cancel()
+		<-done
+	})
+
+	select {
+	case call := <-spawner.calls:
+		if call.ProjectID != "demo" || call.IssueID != "github:acme/demo#7" ||
+			call.Prompt != "Implement acme/demo#7: daemon smoke" {
+			t.Fatalf("spawn call = %+v", call)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("mock GitHub issue did not reach the daemon intake spawner")
+	}
+}
+
+type trackerIntakeSmokeSpawner struct {
+	calls chan ports.SpawnConfig
+}
+
+func (s *trackerIntakeSmokeSpawner) Spawn(_ context.Context, cfg ports.SpawnConfig) (domain.Session, int, int, error) {
+	s.calls <- cfg
+	return domain.Session{SessionRecord: domain.SessionRecord{
+		ID:        "smoke-1",
+		ProjectID: cfg.ProjectID,
+		IssueID:   cfg.IssueID,
+		Kind:      cfg.Kind,
+	}}, len(cfg.Prompt), 0, nil
 }
 
 func TestTrackerTokenSourcePrefersAOGitHubToken(t *testing.T) {
