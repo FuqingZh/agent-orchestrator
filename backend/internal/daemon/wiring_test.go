@@ -509,6 +509,26 @@ func TestTrackerTokenSourcePrefersGitHubAppOverGlobalToken(t *testing.T) {
 	}
 }
 
+func TestGitHubCredentialsLeaveAppSourceNilWhenNotConfigured(t *testing.T) {
+	t.Setenv("AO_GITHUB_TOKEN", "")
+	t.Setenv("AO_GITHUB_APP_ID", "")
+	t.Setenv("AO_GITHUB_APP_INSTALLATION_ID", "")
+	t.Setenv("AO_GITHUB_APP_PRIVATE_KEY_FILE", "")
+
+	source, configured, err := configuredGitHubAppTokenSource()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if configured || source != nil {
+		t.Fatalf("source = %#v, configured = %v; want nil, false", source, configured)
+	}
+
+	_, err = newTrackerPromptTokenSource().Token(context.Background())
+	if !errors.Is(err, trackergithub.ErrNoToken) {
+		t.Fatalf("prompt token error = %v, want ErrNoToken", err)
+	}
+}
+
 func TestGitHubCredentialsRejectPartialAppWithoutFallback(t *testing.T) {
 	t.Setenv("AO_GITHUB_TOKEN", "")
 	t.Setenv("GITHUB_TOKEN", "broad-global-token")
