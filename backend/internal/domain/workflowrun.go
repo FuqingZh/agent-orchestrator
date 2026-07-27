@@ -8,6 +8,7 @@ import "time"
 // released.
 type WorkflowRunState string
 
+// Workflow run states describe AO's ownership of dispatch and retry work.
 const (
 	WorkflowRunClaimed     WorkflowRunState = "claimed"
 	WorkflowRunRunning     WorkflowRunState = "running"

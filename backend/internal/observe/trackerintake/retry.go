@@ -11,22 +11,22 @@ const (
 
 // FailureRetryDelay returns the Symphony failure backoff for a 1-based attempt,
 // capped without an overflowing shift for large attempt counts.
-func FailureRetryDelay(attempt int64, max time.Duration) time.Duration {
+func FailureRetryDelay(attempt int64, maximum time.Duration) time.Duration {
 	if attempt < 1 {
 		attempt = 1
 	}
-	if max <= 0 {
-		max = 5 * time.Minute
+	if maximum <= 0 {
+		maximum = 5 * time.Minute
 	}
 	delay := failureRetryBase
-	for current := int64(1); current < attempt && delay < max; current++ {
-		if delay > max/2 {
-			return max
+	for current := int64(1); current < attempt && delay < maximum; current++ {
+		if delay > maximum/2 {
+			return maximum
 		}
 		delay *= 2
 	}
-	if delay > max {
-		return max
+	if delay > maximum {
+		return maximum
 	}
 	return delay
 }
