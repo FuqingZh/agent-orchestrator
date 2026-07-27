@@ -16,6 +16,7 @@ func TestRuntimeIntegration(t *testing.T) {
 	if _, err := exec.LookPath("tmux"); err != nil {
 		t.Skip("tmux unavailable")
 	}
+	isolateTestServer(t)
 
 	ctx := context.Background()
 	id := strings.ReplaceAll(t.Name(), "/", "_")
@@ -85,6 +86,7 @@ func TestRuntimeIntegrationExactSessionParsing(t *testing.T) {
 	if _, err := exec.LookPath("tmux"); err != nil {
 		t.Skip("tmux unavailable")
 	}
+	isolateTestServer(t)
 
 	ctx := context.Background()
 	base := strings.ReplaceAll(t.Name(), "/", "_")
@@ -128,6 +130,7 @@ func TestRuntimeIntegrationSupervisedExitKeepsInteractiveShell(t *testing.T) {
 	if _, err := exec.LookPath("tmux"); err != nil {
 		t.Skip("tmux unavailable")
 	}
+	isolateTestServer(t)
 
 	ctx := context.Background()
 	id := strings.ReplaceAll(t.Name(), "/", "_")
@@ -222,6 +225,14 @@ func TestSupervisorProcessHelper(t *testing.T) {
 		return
 	}
 	time.Sleep(2 * time.Second)
+}
+
+// isolateTestServer keeps integration tests off the user's tmux server and
+// ensures process-tree probes observe processes created in this test's scope.
+func isolateTestServer(t *testing.T) {
+	t.Helper()
+	t.Setenv("TMUX", "")
+	t.Setenv("TMUX_TMPDIR", t.TempDir())
 }
 
 // waitForOutput polls GetOutput until out contains want or the deadline passes.
