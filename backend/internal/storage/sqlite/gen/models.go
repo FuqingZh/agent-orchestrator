@@ -242,6 +242,20 @@ type WorkerIdleEvent struct {
 	UpdatedAt     time.Time
 }
 
+type WorkflowIssueRun struct {
+	ProjectID        string
+	IssueID          string
+	IssueIdentifier  string
+	SessionID        sql.NullString
+	WorkflowRevision string
+	State            string
+	Attempt          int64
+	RetryDueAt       sql.NullTime
+	LastError        string
+	TerminalReason   string
+	UpdatedAt        time.Time
+}
+
 type WorkspaceRepo struct {
 	ProjectID     domain.ProjectID
 	Name          string
