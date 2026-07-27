@@ -80,6 +80,40 @@ func TestRuntimeIntegration(t *testing.T) {
 	}
 }
 
+func TestRuntimeIntegrationDoesNotInheritLinearCredentials(t *testing.T) {
+	if _, err := exec.LookPath("tmux"); err != nil {
+		t.Skip("tmux unavailable")
+	}
+	isolateTestServer(t)
+	t.Setenv("AO_LINEAR_API_KEY", "test-api-key")
+	t.Setenv("AO_LINEAR_OAUTH_TOKEN", "test-oauth-token")
+
+	ctx := context.Background()
+	id := strings.ReplaceAll(t.Name(), "/", "_")
+	r := New(Options{Timeout: 5 * time.Second})
+	t.Cleanup(func() {
+		_ = r.Destroy(context.Background(), ports.RuntimeHandle{ID: id})
+	})
+
+	h, err := r.Create(ctx, ports.RuntimeConfig{
+		SessionID:     domain.SessionID(id),
+		WorkspacePath: t.TempDir(),
+		Argv: []string{
+			"sh",
+			"-c",
+			`if env | grep -q '^AO_LINEAR_'; then echo linear-credential-leaked; else echo linear-credential-clean; fi`,
+		},
+	})
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+
+	out := waitForOutput(t, r, h, "linear-credential-clean", 5*time.Second)
+	if strings.Contains(out, "linear-credential-leaked") {
+		t.Fatalf("worker pane inherited a Linear credential variable: %q", out)
+	}
+}
+
 // TestRuntimeIntegrationExactSessionParsing verifies that IsAlive uses exact
 // session matching and does not treat a prefix as a live session.
 func TestRuntimeIntegrationExactSessionParsing(t *testing.T) {
