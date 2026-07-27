@@ -564,12 +564,10 @@ func tmuxProcessEnv(base []string) []string {
 	env := make([]string, 0, len(base))
 	for _, entry := range base {
 		key, _, _ := strings.Cut(entry, "=")
-		switch key {
-		case "AO_LINEAR_API_KEY", "AO_LINEAR_OAUTH_TOKEN":
+		if isDaemonOnlyEnvKey(key) {
 			continue
-		default:
-			env = append(env, entry)
 		}
+		env = append(env, entry)
 	}
 	return env
 }
@@ -830,8 +828,20 @@ func validateEnvKeys(env map[string]string) error {
 		if !validEnvKey(key) {
 			return fmt.Errorf("tmux runtime: invalid env key %q", key)
 		}
+		if isDaemonOnlyEnvKey(key) {
+			return fmt.Errorf("tmux runtime: daemon-only env key %q", key)
+		}
 	}
 	return nil
+}
+
+func isDaemonOnlyEnvKey(key string) bool {
+	switch key {
+	case "AO_LINEAR_API_KEY", "AO_LINEAR_OAUTH_TOKEN":
+		return true
+	default:
+		return false
+	}
 }
 
 func validEnvKey(key string) bool {
@@ -879,6 +889,10 @@ func buildLaunchCommand(cfg ports.RuntimeConfig) string {
 	b.WriteString("cd ")
 	b.WriteString(shellQuote(cfg.WorkspacePath))
 	b.WriteString(" || exit; ")
+	// A tmux server can outlive the daemon that created it and retain that
+	// daemon's global environment. Clear daemon-only credentials in every pane,
+	// including panes created after an upgrade connects to an existing server.
+	b.WriteString("unset AO_LINEAR_API_KEY AO_LINEAR_OAUTH_TOKEN; ")
 	if _, configured := cfg.Env["NO_COLOR"]; !configured {
 		// The daemon may be launched from another agent or CI environment that
 		// sets NO_COLOR for its own captured output. Do not leak that ambient

@@ -90,6 +90,26 @@ func TestRuntimeIntegrationDoesNotInheritLinearCredentials(t *testing.T) {
 
 	ctx := context.Background()
 	id := strings.ReplaceAll(t.Name(), "/", "_")
+	seedID := id + "_seed"
+	seed := exec.CommandContext(
+		ctx,
+		"tmux",
+		"new-session",
+		"-d",
+		"-s",
+		seedID,
+		"sh",
+		"-c",
+		"sleep 30",
+	)
+	seed.Env = os.Environ()
+	if out, err := seed.CombinedOutput(); err != nil {
+		t.Fatalf("start credential-retaining tmux server: %v: %s", err, out)
+	}
+	t.Cleanup(func() {
+		_ = exec.Command("tmux", "kill-server").Run()
+	})
+
 	r := New(Options{Timeout: 5 * time.Second})
 	t.Cleanup(func() {
 		_ = r.Destroy(context.Background(), ports.RuntimeHandle{ID: id})
