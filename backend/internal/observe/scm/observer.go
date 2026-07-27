@@ -990,7 +990,11 @@ func (o *Observer) refreshReviews(ctx context.Context, subjects map[string]*subj
 		if hasObs && obs.Review.Decision != "" {
 			decision = obs.Review.Decision
 		}
-		if !o.needsReviewRefresh(pkey, s.known, decision, hasObs, now) {
+		providerUpdatedAt := time.Time{}
+		if hasObs {
+			providerUpdatedAt = obs.PR.UpdatedAtProvider
+		}
+		if !o.needsReviewRefresh(pkey, s.known, decision, hasObs, providerUpdatedAt, now) {
 			continue
 		}
 		review, err := o.provider.FetchReviewThreads(ctx, ports.SCMPRRef{Repo: s.repo, Number: s.known.Number, URL: s.known.URL})
@@ -1032,11 +1036,17 @@ func (o *Observer) refreshReviews(ctx context.Context, subjects map[string]*subj
 	}
 }
 
-func (o *Observer) needsReviewRefresh(key string, local domain.PullRequest, decision string, hasObs bool, now time.Time) bool {
+func (o *Observer) needsReviewRefresh(key string, local domain.PullRequest, decision string, hasObs bool, providerUpdatedAt, now time.Time) bool {
 	if o.Cache.ReviewRefreshFailed[key] {
 		return true
 	}
 	if local.ReviewHash == "" {
+		return true
+	}
+	// COMMENTED reviews leave GitHub's aggregate review decision unchanged but
+	// advance the provider PR timestamp. Refresh threads on that edge so inline
+	// feedback reaches the owning worker without polling every open PR.
+	if hasObs && !providerUpdatedAt.IsZero() && providerUpdatedAt.After(local.UpdatedAtProvider) {
 		return true
 	}
 	if decision == string(domain.ReviewChangesRequest) {

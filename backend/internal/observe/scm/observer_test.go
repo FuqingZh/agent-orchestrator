@@ -1021,6 +1021,53 @@ func TestPoll_ReviewPollingRespectsInterval(t *testing.T) {
 	}
 }
 
+func TestPoll_PRUpdateRefreshesCommentedReviewThreadsWithoutDecisionChange(t *testing.T) {
+	store := testStoreWithSession()
+	local := knownPR(1)
+	local.Review = domain.ReviewNone
+	local.ReviewHash = reviewSemanticHash(ports.SCMReviewObservation{Decision: string(domain.ReviewNone)})
+	local.UpdatedAtProvider = time.Unix(100, 0).UTC()
+	oldObservation := testObs(1)
+	oldObservation.PR.UpdatedAtProvider = local.UpdatedAtProvider
+	local.MetadataHash = metadataSemanticHash(oldObservation)
+	store.prs["p-1"] = []domain.PullRequest{local}
+
+	updatedObservation := testObs(1)
+	updatedObservation.PR.UpdatedAtProvider = time.Unix(200, 0).UTC()
+	provider := &fakeProvider{
+		repoGuards: map[string]ports.SCMGuardResult{prKey(testRepo, 0): {ETag: "repo2"}},
+		observations: map[string]ports.SCMObservation{
+			prKey(testRepo, 1): updatedObservation,
+		},
+		reviews: map[string]ports.SCMReviewObservation{
+			prKey(testRepo, 1): {
+				Decision: string(domain.ReviewNone),
+				Threads: []ports.SCMReviewThreadObservation{{
+					ID: "codex-thread", Path: "f.go", Line: 7, IsBot: true,
+					Comments: []ports.SCMReviewCommentObservation{{
+						ID: "codex-comment", Author: "chatgpt-codex-connector[bot]", Body: "fix this", IsBot: true,
+					}},
+				}},
+			},
+		},
+	}
+	lifecycle := &fakeLifecycle{}
+	observer := newTestObserver(store, provider, lifecycle, time.Unix(210, 0).UTC())
+
+	if err := observer.Poll(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if provider.reviewCalls != 1 {
+		t.Fatalf("reviewCalls = %d, want 1 after provider PR update", provider.reviewCalls)
+	}
+	if len(store.writes) == 0 || store.writes[0].reviewMode != ports.ReviewWriteReplace || len(store.writes[0].comments) != 1 {
+		t.Fatalf("updated COMMENTED review was not persisted: %#v", store.writes)
+	}
+	if len(lifecycle.observed) != 1 || len(lifecycle.observed[0].Review.Threads) != 1 {
+		t.Fatalf("updated COMMENTED review was not delivered: %#v", lifecycle.observed)
+	}
+}
+
 func TestPoll_UnchangedHashesDoNotWriteOrNotify(t *testing.T) {
 	store := testStoreWithSession()
 	obsValue := testObs(1)
