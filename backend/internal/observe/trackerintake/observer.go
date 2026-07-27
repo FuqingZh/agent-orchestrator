@@ -48,6 +48,7 @@ type Store interface {
 // lane. Keeping it separate from Store leaves legacy tracker intake unchanged.
 type WorkflowRunStore interface {
 	TryClaimWorkflowIssue(ctx context.Context, rec domain.WorkflowRunRecord) (bool, error)
+	TryClaimDueWorkflowRetry(ctx context.Context, rec domain.WorkflowRunRecord, dueAt time.Time) (bool, error)
 	BindWorkflowIssueSession(ctx context.Context, projectID domain.ProjectID, issueID domain.IssueID, sessionID domain.SessionID, updatedAt time.Time) (bool, error)
 	QueueWorkflowRetry(ctx context.Context, rec domain.WorkflowRunRecord) (bool, error)
 	ReleaseWorkflowIssue(ctx context.Context, projectID domain.ProjectID, issueID domain.IssueID, reason string, updatedAt time.Time) (bool, error)
@@ -212,7 +213,7 @@ func (o *Observer) Poll(ctx context.Context) error {
 	if err != nil {
 		return err
 	}
-	retryAttempts, err := o.reconcileWorkflowRuns(ctx, enabledProjects, sessions, now)
+	retryDispatches, err := o.reconcileWorkflowRuns(ctx, enabledProjects, sessions, now)
 	if err != nil {
 		return err
 	}
@@ -226,7 +227,7 @@ func (o *Observer) Poll(ctx context.Context) error {
 			o.logger.Debug("tracker intake: project in failure backoff", "project", project.ID, "until", until)
 			continue
 		}
-		if failed := o.pollProject(ctx, project, seen, budget, retryAttempts); failed {
+		if failed := o.pollProject(ctx, project, seen, budget, retryDispatches[domain.ProjectID(project.ID)]); failed {
 			o.backoffUntil[project.ID] = now.Add(o.failureBackoff)
 		} else {
 			delete(o.backoffUntil, project.ID)
@@ -248,18 +249,23 @@ func (o *Observer) effectiveTick() time.Duration {
 	return o.tick
 }
 
-func (o *Observer) reconcileWorkflowRuns(ctx context.Context, projects []domain.ProjectRecord, sessions []domain.SessionRecord, now time.Time) (map[domain.IssueID]int64, error) {
-	retryAttempts := make(map[domain.IssueID]int64)
+type retryDispatch struct {
+	issue   domain.Issue
+	attempt int64
+}
+
+func (o *Observer) reconcileWorkflowRuns(ctx context.Context, projects []domain.ProjectRecord, sessions []domain.SessionRecord, now time.Time) (map[domain.ProjectID][]retryDispatch, error) {
+	retries := make(map[domain.ProjectID][]retryDispatch)
 	runStore, ok := o.store.(WorkflowRunStore)
 	if !ok {
-		return retryAttempts, nil
+		return retries, nil
 	}
 	runs, err := runStore.ListActiveWorkflowRuns(ctx)
 	if err != nil {
 		return nil, fmt.Errorf("tracker intake: list active workflow runs: %w", err)
 	}
 	if len(runs) == 0 {
-		return retryAttempts, nil
+		return retries, nil
 	}
 	projectByID := make(map[domain.ProjectID]domain.ProjectRecord, len(projects))
 	for _, project := range projects {
@@ -351,16 +357,14 @@ func (o *Observer) reconcileWorkflowRuns(ctx context.Context, projects []domain.
 			}
 		case domain.WorkflowRunRetryQueued:
 			if !run.RetryDueAt.IsZero() && !run.RetryDueAt.After(now) {
-				retryAttempts[run.IssueID] = run.Attempt
-				// Releasing here lets the normal candidate pass reclaim and
-				// dispatch with the latest workflow revision and slot budget.
-				if _, err := runStore.ReleaseWorkflowIssue(ctx, run.ProjectID, run.IssueID, "retry_due", now); err != nil {
-					return nil, err
-				}
+				retries[run.ProjectID] = append(retries[run.ProjectID], retryDispatch{
+					issue:   issue,
+					attempt: run.Attempt,
+				})
 			}
 		}
 	}
-	return retryAttempts, nil
+	return retries, nil
 }
 
 func (o *Observer) stopWorkflowSession(ctx context.Context, run domain.WorkflowRunRecord, sessions map[domain.SessionID]domain.SessionRecord) bool {
@@ -407,7 +411,7 @@ func trackerIDFromCanonical(issueID domain.IssueID) (domain.TrackerID, bool) {
 
 // pollProject returns failed=true for conditions that should be retried after a
 // backoff window rather than logged on every poll.
-func (o *Observer) pollProject(ctx context.Context, project domain.ProjectRecord, seen map[domain.IssueID]bool, budget *dispatchBudget, retryAttempts map[domain.IssueID]int64) (failed bool) {
+func (o *Observer) pollProject(ctx context.Context, project domain.ProjectRecord, seen map[domain.IssueID]bool, budget *dispatchBudget, retries []retryDispatch) (failed bool) {
 	cfg := project.Config.TrackerIntake.WithDefaults()
 	if !cfg.Enabled {
 		return false
@@ -448,14 +452,28 @@ func (o *Observer) pollProject(ctx context.Context, project domain.ProjectRecord
 		o.logger.Warn("tracker intake: no adapter for provider", "project", project.ID, "provider", cfg.Provider, "err", err)
 		return true
 	}
-	issues, err := tracker.List(ctx, repo, domain.ListFilter{
+	retryAttempts := make(map[domain.IssueID]int64, len(retries))
+	issues := make([]domain.Issue, 0, len(retries))
+	for _, retry := range retries {
+		issueID := CanonicalIssueID(retry.issue.ID)
+		if issueID == "" {
+			continue
+		}
+		retryAttempts[issueID] = retry.attempt
+		issues = append(issues, retry.issue)
+	}
+	listed, listErr := tracker.List(ctx, repo, domain.ListFilter{
 		State:    domain.ListOpen,
 		Labels:   workflowLabels(workflowConfig, workflowEnabled),
 		Assignee: cfg.Assignee,
 	})
-	if err != nil {
-		o.logger.Error("tracker intake: list issues failed", "project", project.ID, "repo", repo.Native, "err", err)
-		return true
+	if listErr != nil {
+		o.logger.Error("tracker intake: list issues failed", "project", project.ID, "repo", repo.Native, "err", listErr)
+		if len(issues) == 0 {
+			return true
+		}
+	} else {
+		issues = append(issues, listed...)
 	}
 	var spawnFailed bool
 	for _, issue := range issues {
@@ -499,14 +517,21 @@ func (o *Observer) pollProject(ctx context.Context, project domain.ProjectRecord
 				spawnFailed = true
 				continue
 			}
-			claimed, claimErr := runStore.TryClaimWorkflowIssue(ctx, domain.WorkflowRunRecord{
+			claim := domain.WorkflowRunRecord{
 				ProjectID:        domain.ProjectID(project.ID),
 				IssueID:          issueID,
 				IssueIdentifier:  issue.ID.Native,
 				WorkflowRevision: workflowConfig.Revision,
 				Attempt:          attempt,
 				UpdatedAt:        o.clock().UTC(),
-			})
+			}
+			var claimed bool
+			var claimErr error
+			if _, retrying := retryAttempts[issueID]; retrying {
+				claimed, claimErr = runStore.TryClaimDueWorkflowRetry(ctx, claim, o.clock().UTC())
+			} else {
+				claimed, claimErr = runStore.TryClaimWorkflowIssue(ctx, claim)
+			}
 			if claimErr != nil {
 				o.logger.Error("tracker intake: claim workflow issue failed", "project", project.ID, "issue", issueID, "err", claimErr)
 				spawnFailed = true
@@ -555,7 +580,7 @@ func (o *Observer) pollProject(ctx context.Context, project domain.ProjectRecord
 			budget.recordSpawn(project.ID, normalizedState(issue.State))
 		}
 	}
-	return spawnFailed
+	return spawnFailed || listErr != nil
 }
 
 type dispatchBudget struct {

@@ -41,7 +41,7 @@ Agent Orchestrator. It is not a full Symphony conformance claim.
 | --- | --- | --- |
 | P0 executable workflow contract | Implemented by this slice | Package tests, race test, vet, repository lint. |
 | P1 workflow-driven GitHub intake | Implemented and smoke-tested | Tests cover rendered prompts, required labels, global/project dispatch, same-pass state limits, reload fallback, workflow polling cadence, legacy behavior, and real GitHub-adapter wiring against a mock server. |
-| P2 durable claim/retry/reconciliation | Implemented foundation, pending timing smoke | SQLite tests cover single-claim, restart recovery, terminal/ineligible cancellation, bounded retry, stale-claim recovery, and trigger-fed CDC. |
+| P2 durable claim/retry/reconciliation | Implemented and timing-smoke-tested | SQLite tests cover single-claim, restart recovery, terminal/ineligible cancellation, bounded retry, direct by-ID retry dispatch, stale-claim recovery, trigger-fed CDC, and near-deadline continuation. |
 | P3 Linear adapter | Not yet implemented | Adapter contract tests and isolated real Linear canary. |
 
 ## P1/P2 test gates
@@ -68,8 +68,7 @@ P2 must not ship until deterministic restart tests demonstrate:
 6. storage triggers, rather than store methods, feed the existing CDC path.
 
 The deterministic P2 gates above are covered, including an SQLite close/reopen
-continuation smoke. P2 is still a draft until a daemon-level timing canary proves
-that a normal exit wakes close to the documented one-second continuation delay;
-the current fixed observer tick can add scheduling latency. Direct by-ID retry
-dispatch also remains a closeout item: the observer refreshes the issue by ID,
-then re-enters the normal candidate-list dispatch path.
+continuation smoke. A loop-level timing smoke verifies that a normal exit wakes
+near the documented one-second continuation delay, and due retries dispatch
+from the tracker item refreshed by ID even when it is absent from the candidate
+list. The due-row transition back to `claimed` remains atomic.

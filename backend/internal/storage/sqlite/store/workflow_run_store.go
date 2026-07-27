@@ -44,6 +44,32 @@ WHERE workflow_issue_runs.state = 'released'`,
 	return n == 1, nil
 }
 
+// TryClaimDueWorkflowRetry atomically transitions one due retry back to a
+// reservation. It leaves a queued retry untouched when its deadline has not
+// arrived or another observer already claimed it.
+func (s *Store) TryClaimDueWorkflowRetry(ctx context.Context, rec domain.WorkflowRunRecord, dueAt time.Time) (bool, error) {
+	s.writeMu.Lock()
+	defer s.writeMu.Unlock()
+	res, err := s.writeDB.ExecContext(ctx, `
+UPDATE workflow_issue_runs
+SET issue_identifier = ?, session_id = NULL, workflow_revision = ?,
+    state = 'claimed', attempt = ?, retry_due_at = NULL, last_error = '',
+    terminal_reason = '', updated_at = ?
+WHERE project_id = ? AND issue_id = ? AND state = 'retry_queued'
+    AND retry_due_at <= ?`,
+		rec.IssueIdentifier, rec.WorkflowRevision, rec.Attempt, rec.UpdatedAt,
+		rec.ProjectID, rec.IssueID, dueAt,
+	)
+	if err != nil {
+		return false, fmt.Errorf("claim due workflow retry %s/%s: %w", rec.ProjectID, rec.IssueID, err)
+	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return false, fmt.Errorf("claim due workflow retry %s/%s rows affected: %w", rec.ProjectID, rec.IssueID, err)
+	}
+	return n == 1, nil
+}
+
 // BindWorkflowIssueSession transitions a reservation to running after Spawn
 // returns the durable AO session identity.
 func (s *Store) BindWorkflowIssueSession(ctx context.Context, projectID domain.ProjectID, issueID domain.IssueID, sessionID domain.SessionID, updatedAt time.Time) (bool, error) {

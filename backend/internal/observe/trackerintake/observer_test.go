@@ -442,6 +442,50 @@ tracker:
 	}
 }
 
+func TestPollWorkflowDueRetryDispatchesByIDWhenListOmitsIssue(t *testing.T) {
+	projectPath := t.TempDir()
+	writeIntakeWorkflow(t, projectPath, `---
+tracker:
+  kind: github
+  provider:
+    assignee: alice
+  active_states: [open]
+---
+Retry {{ issue.identifier }} attempt {{ attempt }}
+`)
+	now := time.Date(2026, 7, 26, 11, 0, 0, 0, time.UTC)
+	issue := workflowIssue("acme/demo#1")
+	issueID := CanonicalIssueID(issue.ID)
+	store := &fakeStore{
+		projects: []domain.ProjectRecord{workflowProject("demo", projectPath)},
+		workflowRuns: map[string]domain.WorkflowRunRecord{
+			workflowRunKey("demo", issueID): {
+				ProjectID: "demo", IssueID: issueID, WorkflowRevision: "rev-1",
+				State: domain.WorkflowRunRetryQueued, Attempt: 2,
+				RetryDueAt: now.Add(-time.Second), UpdatedAt: now.Add(-time.Second),
+			},
+		},
+	}
+	tracker := &fakeTracker{getIssue: &issue}
+	spawner := &fakeSpawner{}
+	if err := New(singleResolver(tracker), store, spawner, Config{
+		Clock:  func() time.Time { return now },
+		Logger: discardLogger(),
+	}).Poll(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if len(spawner.calls) != 1 {
+		t.Fatalf("direct retry spawn calls = %+v, want one", spawner.calls)
+	}
+	if got := spawner.calls[0].Prompt; got != "Retry acme/demo#1 attempt 2" {
+		t.Fatalf("direct retry prompt = %q", got)
+	}
+	run := store.workflowRuns[workflowRunKey("demo", issueID)]
+	if run.State != domain.WorkflowRunRunning || run.Attempt != 2 {
+		t.Fatalf("direct retry run = %+v", run)
+	}
+}
+
 func TestPollWorkflowSpawnFailureQueuesDocumentedBackoff(t *testing.T) {
 	projectPath := t.TempDir()
 	writeIntakeWorkflow(t, projectPath, `---
@@ -824,6 +868,28 @@ func (f *fakeStore) TryClaimWorkflowIssue(_ context.Context, rec domain.Workflow
 	return true, nil
 }
 
+func (f *fakeStore) TryClaimDueWorkflowRetry(_ context.Context, rec domain.WorkflowRunRecord, dueAt time.Time) (bool, error) {
+	if f.workflowRuns == nil {
+		return false, nil
+	}
+	key := workflowRunKey(rec.ProjectID, rec.IssueID)
+	existing, ok := f.workflowRuns[key]
+	if !ok || existing.State != domain.WorkflowRunRetryQueued || existing.RetryDueAt.After(dueAt) {
+		return false, nil
+	}
+	existing.IssueIdentifier = rec.IssueIdentifier
+	existing.SessionID = ""
+	existing.WorkflowRevision = rec.WorkflowRevision
+	existing.State = domain.WorkflowRunClaimed
+	existing.Attempt = rec.Attempt
+	existing.RetryDueAt = time.Time{}
+	existing.LastError = ""
+	existing.TerminalReason = ""
+	existing.UpdatedAt = rec.UpdatedAt
+	f.workflowRuns[key] = existing
+	return true, nil
+}
+
 func (f *fakeStore) BindWorkflowIssueSession(_ context.Context, projectID domain.ProjectID, issueID domain.IssueID, sessionID domain.SessionID, updatedAt time.Time) (bool, error) {
 	key := workflowRunKey(projectID, issueID)
 	rec, ok := f.workflowRuns[key]
@@ -884,6 +950,7 @@ func workflowRunKey(projectID domain.ProjectID, issueID domain.IssueID) string {
 
 type fakeTracker struct {
 	issues       []domain.Issue
+	getIssue     *domain.Issue
 	issuesByRepo map[string][]domain.Issue
 	failRepos    map[string]error
 	repos        []domain.TrackerRepo
@@ -891,6 +958,9 @@ type fakeTracker struct {
 }
 
 func (f *fakeTracker) Get(_ context.Context, id domain.TrackerID) (domain.Issue, error) {
+	if f.getIssue != nil && f.getIssue.ID == id {
+		return *f.getIssue, nil
+	}
 	for _, issue := range f.issues {
 		if issue.ID == id {
 			return issue, nil

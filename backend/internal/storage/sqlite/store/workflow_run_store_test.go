@@ -140,6 +140,22 @@ func TestWorkflowRunRetryFactsAndCDC(t *testing.T) {
 	if err != nil || len(dueRows) != 1 || dueRows[0].IssueID != issueID {
 		t.Fatalf("due retries = %+v err=%v", dueRows, err)
 	}
+	retryClaim := claim
+	retryClaim.Attempt = 1
+	retryClaim.WorkflowRevision = "rev-2"
+	retryClaim.UpdatedAt = due
+	if claimed, err := s.TryClaimDueWorkflowRetry(ctx, retryClaim, due.Add(-time.Nanosecond)); err != nil || claimed {
+		t.Fatalf("early retry claim: claimed=%v err=%v", claimed, err)
+	}
+	if claimed, err := s.TryClaimDueWorkflowRetry(ctx, retryClaim, due); err != nil || !claimed {
+		t.Fatalf("due retry claim: claimed=%v err=%v", claimed, err)
+	}
+	got, ok, err = s.GetWorkflowRun(ctx, "demo", issueID)
+	if err != nil || !ok || got.State != domain.WorkflowRunClaimed ||
+		got.Attempt != 1 || got.WorkflowRevision != "rev-2" ||
+		got.SessionID != "" || !got.RetryDueAt.IsZero() {
+		t.Fatalf("claimed retry facts = %+v ok=%v err=%v", got, ok, err)
+	}
 
 	events, err := s.EventsAfter(ctx, 0, 100)
 	if err != nil {

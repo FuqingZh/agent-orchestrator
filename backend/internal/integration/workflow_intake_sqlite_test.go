@@ -147,6 +147,103 @@ Attempt {{ attempt }}
 	}
 }
 
+func TestWorkflowIntakeContinuationTimingSmoke(t *testing.T) {
+	ctx := context.Background()
+	projectDir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(projectDir, "WORKFLOW.md"), []byte(`---
+tracker:
+  kind: github
+  provider:
+    repo: acme/demo
+    assignee: alice
+  active_states: [open]
+polling:
+  interval_ms: 20
+---
+Continue {{ issue.identifier }} attempt {{ attempt }}
+`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	store, err := sqlite.Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	now := time.Now().UTC()
+	issue := domain.Issue{
+		ID:        domain.TrackerID{Provider: domain.TrackerProviderGitHub, Native: "acme/demo#77"},
+		Title:     "timed continuation",
+		State:     domain.IssueOpen,
+		Assignees: []string{"alice"},
+	}
+	if err := store.UpsertProject(ctx, domain.ProjectRecord{
+		ID:            "demo",
+		Path:          projectDir,
+		RepoOriginURL: "https://github.com/acme/demo.git",
+		RegisteredAt:  now,
+		Config: domain.ProjectConfig{TrackerIntake: domain.TrackerIntakeConfig{
+			Enabled:      true,
+			WorkflowPath: "WORKFLOW.md",
+		}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	issueID := trackerintake.CanonicalIssueID(issue.ID)
+	session, err := store.CreateSession(ctx, domain.SessionRecord{
+		ProjectID: "demo",
+		IssueID:   issueID,
+		Kind:      domain.KindWorker,
+		Harness:   domain.HarnessFake,
+		Activity:  domain.Activity{State: domain.ActivityExited, LastActivityAt: now},
+		CreatedAt: now,
+		UpdatedAt: now,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	claim := domain.WorkflowRunRecord{
+		ProjectID:        "demo",
+		IssueID:          issueID,
+		IssueIdentifier:  issue.ID.Native,
+		WorkflowRevision: "initial",
+		UpdatedAt:        now,
+	}
+	if ok, err := store.TryClaimWorkflowIssue(ctx, claim); err != nil || !ok {
+		t.Fatalf("claim: ok=%v err=%v", ok, err)
+	}
+	if ok, err := store.BindWorkflowIssueSession(ctx, "demo", issueID, session.ID, now); err != nil || !ok {
+		t.Fatalf("bind: ok=%v err=%v", ok, err)
+	}
+
+	spawner := &timingSpawner{store: store, calls: make(chan time.Time, 1)}
+	observer := trackerintake.New(
+		trackerintake.SingleTrackerResolver{
+			Provider: domain.TrackerProviderGitHub,
+			Adapter:  &integrationTracker{issue: issue},
+		},
+		store,
+		spawner,
+		trackerintake.Config{Terminator: sqliteTerminator{store: store}},
+	)
+	started := time.Now()
+	runCtx, cancel := context.WithCancel(ctx)
+	done := observer.Start(runCtx)
+	t.Cleanup(func() {
+		cancel()
+		<-done
+	})
+
+	select {
+	case spawnedAt := <-spawner.calls:
+		elapsed := spawnedAt.Sub(started)
+		if elapsed < 900*time.Millisecond || elapsed > 2*time.Second {
+			t.Fatalf("continuation elapsed = %s, want near one-second retry", elapsed)
+		}
+	case <-time.After(2500 * time.Millisecond):
+		t.Fatal("continuation was not dispatched near its one-second deadline")
+	}
+}
+
 type integrationTracker struct {
 	issue domain.Issue
 }
@@ -168,6 +265,29 @@ type sqliteSpawner struct {
 	store *sqlite.Store
 	now   func() time.Time
 	calls int
+}
+
+type timingSpawner struct {
+	store *sqlite.Store
+	calls chan time.Time
+}
+
+func (s *timingSpawner) Spawn(_ context.Context, cfg ports.SpawnConfig) (domain.Session, int, int, error) {
+	now := time.Now().UTC()
+	rec, err := s.store.CreateSession(context.Background(), domain.SessionRecord{
+		ProjectID: cfg.ProjectID,
+		IssueID:   cfg.IssueID,
+		Kind:      cfg.Kind,
+		Harness:   domain.HarnessFake,
+		Activity:  domain.Activity{State: domain.ActivityActive, LastActivityAt: now},
+		Metadata:  domain.SessionMetadata{Prompt: cfg.Prompt},
+		CreatedAt: now,
+		UpdatedAt: now,
+	})
+	if err == nil {
+		s.calls <- now
+	}
+	return domain.Session{SessionRecord: rec}, len(cfg.Prompt), 0, err
 }
 
 func (s *sqliteSpawner) Spawn(_ context.Context, cfg ports.SpawnConfig) (domain.Session, int, int, error) {
