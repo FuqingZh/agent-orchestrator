@@ -123,6 +123,20 @@ file with no group or other permissions (for example, mode `0600`). If any App
 variable is present, all three are required; invalid App configuration fails
 closed and does not fall back to a broader host credential.
 
+### Linear credentials
+
+Linear workflow intake uses exactly one explicitly AO-scoped credential:
+
+| Variable                | Purpose |
+| ----------------------- | ------- |
+| `AO_LINEAR_API_KEY`     | Personal API key, sent as Linear's raw `Authorization` value. |
+| `AO_LINEAR_OAUTH_TOKEN` | OAuth access token, sent with the `Bearer` scheme. |
+
+Configuring both variables fails closed. Linear intake is available only
+through a Symphony workflow and requires `tracker.provider.project` to name a
+Linear project UUID. The daemon reads tracker state; tracker writes remain
+agent-owned.
+
 ## Manual smoke test
 
 ```bash

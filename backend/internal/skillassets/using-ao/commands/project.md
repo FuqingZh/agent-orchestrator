@@ -151,9 +151,10 @@ ao project set-config <id> [flags]
 | `--post-create stringArray` | Command to run after workspace creation (repeatable) | - |
 | `--session-prefix string` | Displayed session-id prefix | - |
 | `--symlink stringArray` | Repo-relative path to symlink into workspaces (repeatable) | - |
-| `--tracker-assignee string` | GitHub assignee required by legacy intake | - |
-| `--tracker-intake` | Enable GitHub issue intake | - |
-| `--tracker-repo string` | GitHub `owner/repo`; defaults to the registered origin | - |
+| `--tracker-assignee string` | Provider assignee ID, login, email, or name required by intake | - |
+| `--tracker-intake` | Enable issue intake | - |
+| `--tracker-provider string` | `github` or `linear`; defaults to `github` | - |
+| `--tracker-repo string` | GitHub `owner/repo` or Linear project UUID | - |
 | `--tracker-workflow string` | Repo-relative Symphony `WORKFLOW.md` path | - |
 | `--worker-agent string` | Harness override for worker sessions | - |
 
@@ -182,4 +183,10 @@ ao project set-config agent-orchestrator --agent-rules-file docs/ao-worker-rules
 ```bash
 # Opt into workflow-driven GitHub issue intake
 ao project set-config agent-orchestrator --tracker-intake --tracker-workflow WORKFLOW.md
+```
+
+```bash
+# Opt into project-scoped Linear workflow intake
+ao project set-config agent-orchestrator --tracker-intake --tracker-provider linear \
+  --tracker-repo PROJECT_UUID --tracker-workflow WORKFLOW.md
 ```

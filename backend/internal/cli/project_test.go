@@ -128,6 +128,22 @@ func TestBuildProjectConfigTrackerWorkflowFlag(t *testing.T) {
 	}
 }
 
+func TestBuildProjectConfigLinearWorkflowFlags(t *testing.T) {
+	got, err := buildProjectConfig(projectSetConfigOptions{
+		trackerIntake:   true,
+		trackerProvider: "linear",
+		trackerRepo:     "project-uuid",
+		trackerWorkflow: "WORKFLOW.md",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !got.TrackerIntake.Enabled || got.TrackerIntake.Provider != "linear" ||
+		got.TrackerIntake.Repo != "project-uuid" || got.TrackerIntake.WorkflowPath != "WORKFLOW.md" {
+		t.Fatalf("linear tracker config = %#v", got.TrackerIntake)
+	}
+}
+
 func TestProjectList_Success(t *testing.T) {
 	cfg := setConfigEnv(t)
 	srv, capture := projectServer(t, http.StatusOK, `{"projects":[{"id":"zeta","name":"Zeta","sessionPrefix":"zeta"},{"id":"alpha","name":"Alpha","sessionPrefix":"alpha","resolveError":"config missing"}]}`)
