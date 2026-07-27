@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"os"
 	"strings"
 	"sync"
 	"time"
@@ -60,7 +61,14 @@ type lazyGitHubTracker struct {
 }
 
 func newLazyGitHubTracker(logger *slog.Logger) *lazyGitHubTracker {
-	return &lazyGitHubTracker{logger: logger, tokens: &trackerTokenSource{}}
+	app, _, err := configuredGitHubAppTokenSource()
+	return &lazyGitHubTracker{
+		logger: logger,
+		tokens: &trackerTokenSource{
+			app:    app,
+			appErr: err,
+		},
+	}
 }
 
 func (t *lazyGitHubTracker) Get(ctx context.Context, id domain.TrackerID) (domain.Issue, error) {
@@ -115,9 +123,20 @@ type trackerTokenSource struct {
 	mu        sync.Mutex
 	token     string
 	expiresAt time.Time
+	app       githubTokenSource
+	appErr    error
 }
 
 func (s *trackerTokenSource) Token(ctx context.Context) (string, error) {
+	if token := strings.TrimSpace(os.Getenv("AO_GITHUB_TOKEN")); token != "" {
+		return token, nil
+	}
+	if s.appErr != nil {
+		return "", s.appErr
+	}
+	if s.app != nil {
+		return s.app.Token(ctx)
+	}
 	env := trackergithub.EnvTokenSource{EnvVars: []string{"AO_GITHUB_TOKEN"}}
 	if tok, err := env.Token(ctx); err == nil {
 		return tok, nil

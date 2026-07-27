@@ -1,7 +1,8 @@
 # Symphony compatibility gap design
 
-Status: accepted for phased implementation; phases 0 through 2 are under
-validation in pull requests 2 through 4.
+Status: accepted for phased implementation; phases 0 through 2 are merged in
+pull requests 2 through 4. The private canary credential boundary is delivered
+as phase 2.5 before live acceptance testing.
 
 ## Baseline and intent
 
@@ -173,6 +174,17 @@ No runtime behavior changes in this phase.
 - Reconcile restart, tracker transition, cancellation, and orphaned sessions.
 - Continue active issues without duplicate sessions or unbounded spawn churn.
 - Surface orchestration state through API, CLI, and Electron.
+
+### Phase 2.5: least-privilege GitHub canary identity
+
+- Authenticate tracker intake and SCM observation with a GitHub App
+  installation token that refreshes automatically.
+- Restrict the canary installation to its private repository and the minimum
+  repository permissions needed by the test.
+- Reject partial configuration and unsafe private-key paths without falling
+  back to a broader host credential.
+- Keep static token and `gh` credential paths only as explicit compatibility
+  fallbacks outside the App-configured boundary.
 
 ### Phase 3: Linear
 

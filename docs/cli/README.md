@@ -102,6 +102,27 @@ The CLI and daemon share the same environment-driven config:
 
 The daemon always binds `127.0.0.1`.
 
+### GitHub credentials
+
+AO resolves GitHub credentials in this order:
+
+1. `AO_GITHUB_TOKEN`, when explicitly set;
+2. a GitHub App installation configured with all three variables below;
+3. the legacy `GITHUB_TOKEN` or `gh auth token` fallback when no App setting is
+   present.
+
+| Var                                  | Purpose                                      |
+| ------------------------------------ | -------------------------------------------- |
+| `AO_GITHUB_APP_ID`                   | Numeric GitHub App ID.                       |
+| `AO_GITHUB_APP_INSTALLATION_ID`      | Numeric installation ID.                    |
+| `AO_GITHUB_APP_PRIVATE_KEY_FILE`     | Absolute path to the App private-key file.   |
+
+The App source requests an installation token lazily and refreshes it before
+its one-hour lifetime expires. On Unix, the key must be a regular, non-symlink
+file with no group or other permissions (for example, mode `0600`). If any App
+variable is present, all three are required; invalid App configuration fails
+closed and does not fall back to a broader host credential.
+
 ## Manual smoke test
 
 ```bash
