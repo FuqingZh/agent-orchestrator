@@ -1,6 +1,7 @@
 # Symphony compatibility gap design
 
-Status: proposal
+Status: accepted for phased implementation; phases 0 through 2 are under
+validation in pull requests 2 through 4.
 
 ## Baseline and intent
 
@@ -10,15 +11,22 @@ runtime, worktree management, lifecycle observers, or user interfaces.
 
 The reviewed baselines are:
 
-- Agent Orchestrator `9f8c085fab9db9468d3b3bcd5a39c700023da8e9`
-- OpenAI Symphony specification
-  `1f3219bb1ea5f69a1305dc594e79b0db57c113c5`
+- Agent Orchestrator `e3596af8029c8a99e3ee5b144e7222c246a5ca77`
+- OpenAI Symphony repository
+  `f8e8b8a670c799f6e0ade7a8c25c4bf4a4a56ec7`
+  (`SPEC.md` blob `a6b44e162383e7241a76bce85afb7a8e8d704c45`)
 
 This AO baseline includes the unified session lifecycle and presentation model,
 workspace recovery metadata, migrations 0032 through 0036, and the repair for
-applying missing out-of-order migrations. The claim and attempt storage design
-must extend those facts and migration rules rather than introduce a parallel
-session-state model.
+applying missing out-of-order migrations. It also includes terminal-activity
+reconciliation for stale Codex sessions and conservative preservation of failed
+scratch workspaces for retry. The claim and attempt storage design must extend
+those facts and migration rules rather than introduce a parallel session-state
+model.
+
+The Symphony specification content is unchanged from the previously reviewed
+baseline; the newer repository head adds release tooling rather than contract
+changes.
 
 The first target is a declared `symphony-subset-v1`, not an unqualified
 conformance claim. Unsupported fields or behaviors must fail validation
