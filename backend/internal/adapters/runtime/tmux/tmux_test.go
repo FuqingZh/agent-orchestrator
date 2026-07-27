@@ -125,8 +125,11 @@ func TestCommandBuilders(t *testing.T) {
 	if got, want := sendKeysLiteralArgs("sess-1", "hello"), []string{"send-keys", "-t", "sess-1", "-l", "hello"}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("sendKeysLiteralArgs = %#v, want %#v", got, want)
 	}
-	if got, want := sendEnterArgs("sess-1"), []string{"send-keys", "-t", "sess-1", "Enter"}; !reflect.DeepEqual(got, want) {
+	if got, want := sendEnterArgs("sess-1"), []string{"send-keys", "-t", "sess-1", "C-m"}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("sendEnterArgs = %#v, want %#v", got, want)
+	}
+	if got, want := sendLongPasteSubmitArgs("sess-1"), []string{"send-keys", "-t", "sess-1", "Left", "Right", "C-m"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("sendLongPasteSubmitArgs = %#v, want %#v", got, want)
 	}
 	if got, want := sendInterruptArgs("sess-1"), []string{"send-keys", "-t", "sess-1", "C-c"}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("sendInterruptArgs = %#v, want %#v", got, want)
@@ -731,6 +734,38 @@ func TestSendMessageUsesLiteralFlag(t *testing.T) {
 	// First call must use -l so "Enter" is sent literally, not as a key binding.
 	if fr.calls[0].args[3] != "-l" {
 		t.Fatalf("send-keys args[3] = %q, want -l", fr.calls[0].args[3])
+	}
+}
+
+func TestSendMessageCommitsLongPasteBeforeSubmit(t *testing.T) {
+	r, fr := newTestRuntime(0)
+	r.enterDelay = 0
+	message := strings.Repeat("x", longMessageBytes)
+
+	if err := r.SendMessage(context.Background(), ports.RuntimeHandle{ID: "sess-1"}, message); err != nil {
+		t.Fatalf("SendMessage: %v", err)
+	}
+	if len(fr.calls) != 2 {
+		t.Fatalf("calls = %d, want 2 (paste + long-paste submit)", len(fr.calls))
+	}
+	if got, want := fr.calls[1].args, sendLongPasteSubmitArgs("sess-1"); !reflect.DeepEqual(got, want) {
+		t.Fatalf("long-paste submit args = %#v, want %#v", got, want)
+	}
+}
+
+func TestEnterDelayForLongMessages(t *testing.T) {
+	r, _ := newTestRuntime(0)
+	r.enterDelay = 300 * time.Millisecond
+
+	if got := r.enterDelayFor(strings.Repeat("x", longMessageBytes-1)); got != r.enterDelay {
+		t.Fatalf("short-message enter delay = %s, want %s", got, r.enterDelay)
+	}
+	if got := r.enterDelayFor(strings.Repeat("x", longMessageBytes)); got != longMessageEnterDelay {
+		t.Fatalf("long-message enter delay = %s, want %s", got, longMessageEnterDelay)
+	}
+	r.enterDelay = 2 * time.Second
+	if got := r.enterDelayFor(strings.Repeat("x", longMessageBytes)); got != r.enterDelay {
+		t.Fatalf("configured longer enter delay = %s, want %s", got, r.enterDelay)
 	}
 }
 
