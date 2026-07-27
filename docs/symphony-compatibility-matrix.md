@@ -16,11 +16,11 @@ Agent Orchestrator. It is not a full Symphony conformance claim.
 | Optional YAML front matter plus trimmed Markdown prompt | Supported | Typed errors distinguish missing file, malformed YAML, and non-map front matter. |
 | Preserve unknown top-level and `tracker.provider` keys | Supported | Unknown keys remain in the raw definition and are ignored by the typed core view. |
 | `tracker.kind` | Parsed, preflighted, and wired | The first runtime adapter is `github`; `linear` remains Phase 3. |
-| `tracker.required_labels`, active states, terminal states | Parsed and normalized | Required labels and active states gate GitHub intake; terminal-state reconciliation remains P2. |
+| `tracker.required_labels`, active states, terminal states | Runtime wired | Required labels and active states gate GitHub intake; durable reconciliation terminates and releases terminal or ineligible runs. |
 | `polling.interval_ms` | Runtime wired | Default 30000; the fastest active workflow interval drives AO's shared intake loop, while legacy intake retains its daemon fallback. |
 | `workspace.root` | Supported | Default temp root, relative-to-workflow resolution, `~`, and explicit `$VAR`; missing variables fail validation. |
 | Four workspace hooks plus timeout | Parsed and validated | Hook execution begins after the workflow-driven intake slice. |
-| Global, turn, retry, and per-state concurrency fields | Partially enforced | P1 bounds global/project dispatch and same-pass state dispatch. Durable state counts, turns, and retries remain P2. |
+| Global, turn, retry, and per-state concurrency fields | Partially enforced | P1 bounds global/project dispatch and same-pass state dispatch. P2 persists claims and retries; max-turn execution remains open. |
 | Codex command, policies, and timeouts | Parsed | Policy values remain pass-through. AO agent adapters remain the Phase 1 execution layer. |
 | Config revision | Supported | SHA-256 of the exact workflow file bytes. |
 | Dynamic reload | Runtime wired | GitHub intake reloads defensively before dispatch, retains the last valid config, and reapplies the effective shared polling interval. |
@@ -41,7 +41,7 @@ Agent Orchestrator. It is not a full Symphony conformance claim.
 | --- | --- | --- |
 | P0 executable workflow contract | Implemented by this slice | Package tests, race test, vet, repository lint. |
 | P1 workflow-driven GitHub intake | Implemented and smoke-tested | Tests cover rendered prompts, required labels, global/project dispatch, same-pass state limits, reload fallback, workflow polling cadence, legacy behavior, and real GitHub-adapter wiring against a mock server. |
-| P2 durable claim/retry/reconciliation | Not yet implemented | Single-claim constraint, restart recovery, terminal/ineligible cancellation, bounded retry, orphan recovery, CDC facts. |
+| P2 durable claim/retry/reconciliation | Implemented and timing-smoke-tested | SQLite tests cover single-claim, restart recovery, terminal/ineligible cancellation, bounded retry, direct by-ID retry dispatch, stale-claim recovery, trigger-fed CDC, and near-deadline continuation. |
 | P3 Linear adapter | Not yet implemented | Adapter contract tests and isolated real Linear canary. |
 
 ## P1/P2 test gates
@@ -66,3 +66,9 @@ P2 must not ship until deterministic restart tests demonstrate:
 5. retries retain issue, session, workflow revision, attempt, due time, and
    terminal reason;
 6. storage triggers, rather than store methods, feed the existing CDC path.
+
+The deterministic P2 gates above are covered, including an SQLite close/reopen
+continuation smoke. A loop-level timing smoke verifies that a normal exit wakes
+near the documented one-second continuation delay, and due retries dispatch
+from the tracker item refreshed by ID even when it is absent from the candidate
+list. The due-row transition back to `claimed` remains atomic.
