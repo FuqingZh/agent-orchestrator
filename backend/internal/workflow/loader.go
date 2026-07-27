@@ -6,6 +6,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -13,6 +14,8 @@ import (
 	yaml "gopkg.in/yaml.v3"
 )
 
+// Options supplies environment-dependent values used while resolving a
+// workflow. Nil or empty fields use the process defaults.
 type Options struct {
 	Getenv  func(string) string
 	HomeDir string
@@ -275,7 +278,7 @@ func applyPositiveDuration(path, field string, raw *int64, dst *time.Duration) e
 	return nil
 }
 
-func applyPositiveInt(path, field string, raw *int, dst *int) error {
+func applyPositiveInt(path, field string, raw, dst *int) error {
 	if raw == nil {
 		return nil
 	}
@@ -308,10 +311,11 @@ func normalizeConcurrency(values map[string]any) map[string]int {
 		case int64:
 			value = int(n)
 		case uint64:
-			if uint64(int(n)) != n {
+			converted, err := strconv.Atoi(strconv.FormatUint(n, 10))
+			if err != nil {
 				continue
 			}
-			value = int(n)
+			value = converted
 		default:
 			continue
 		}
@@ -357,6 +361,8 @@ type Reloader struct {
 	current *Workflow
 }
 
+// NewReloader creates a last-known-good workflow reader. Validators run after
+// parsing and before a revision becomes current.
 func NewReloader(path string, opts Options, validators ...func(Workflow) error) *Reloader {
 	return &Reloader{path: path, options: opts, validate: validators}
 }
@@ -386,6 +392,8 @@ func (r *Reloader) Reload() (Workflow, bool, error) {
 	return next, true, nil
 }
 
+// Current returns the last valid workflow and reports whether one has been
+// loaded successfully.
 func (r *Reloader) Current() (Workflow, bool) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()

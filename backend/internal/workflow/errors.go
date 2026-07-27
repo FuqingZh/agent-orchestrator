@@ -2,8 +2,11 @@ package workflow
 
 import "fmt"
 
+// ErrorKind is a stable class for workflow load, validation, and rendering
+// failures.
 type ErrorKind string
 
+// Workflow error kinds are stable operator-facing classifications.
 const (
 	ErrMissingWorkflowFile       ErrorKind = "missing_workflow_file"
 	ErrWorkflowParse             ErrorKind = "workflow_parse_error"

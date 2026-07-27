@@ -4,6 +4,7 @@ package workflow
 
 import "time"
 
+// Compatibility and default values define AO's supported Symphony subset.
 const (
 	CompatibilityProfile          = "symphony-subset-v1"
 	DefaultPrompt                 = "You are working on an issue from the configured tracker."
@@ -45,6 +46,7 @@ type Config struct {
 	Codex     CodexConfig
 }
 
+// TrackerConfig selects the tracker adapter and issue eligibility rules.
 type TrackerConfig struct {
 	Kind           string
 	Provider       map[string]any
@@ -53,14 +55,17 @@ type TrackerConfig struct {
 	TerminalStates []string
 }
 
+// PollingConfig controls how often the workflow tracker is reconciled.
 type PollingConfig struct {
 	Interval time.Duration
 }
 
+// WorkspaceConfig identifies the root for isolated issue workspaces.
 type WorkspaceConfig struct {
 	Root string
 }
 
+// HooksConfig contains lifecycle commands and their shared timeout.
 type HooksConfig struct {
 	AfterCreate  string
 	BeforeRun    string
@@ -69,6 +74,8 @@ type HooksConfig struct {
 	Timeout      time.Duration
 }
 
+// AgentConfig contains global and state-specific dispatch limits and retry
+// bounds.
 type AgentConfig struct {
 	MaxConcurrentAgents        int
 	MaxTurns                   int
@@ -76,6 +83,7 @@ type AgentConfig struct {
 	MaxConcurrentAgentsByState map[string]int
 }
 
+// CodexConfig contains the app-server command and per-thread runtime policies.
 type CodexConfig struct {
 	Command           string
 	ApprovalPolicy    any
@@ -106,6 +114,7 @@ type Issue struct {
 	UpdatedAt    *time.Time
 }
 
+// BlockerRef is the provider-neutral identity and state of a blocking issue.
 type BlockerRef struct {
 	ID         *string `json:"id"`
 	Identifier *string `json:"identifier"`
