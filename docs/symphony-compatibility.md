@@ -1,8 +1,10 @@
 # Symphony compatibility gap design
 
 Status: accepted for phased implementation; phases 0 through 2.5 are merged.
-Phase 3 Linear support has mock contract coverage; its private Linear canary
-remains pending an explicitly provisioned credential.
+Phase 3 Linear support has mock contract coverage and a private-project live
+canary. The canary verified a team-scoped read-only credential, single claim,
+restart recovery, active-state progression, dynamic workflow reload, and
+terminal release.
 
 ## Baseline and intent
 

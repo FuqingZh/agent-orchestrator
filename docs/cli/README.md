@@ -137,6 +137,11 @@ through a Symphony workflow and requires `tracker.provider.project` to name a
 Linear project UUID. The daemon reads tracker state; tracker writes remain
 agent-owned.
 
+`tracker.active_states` and `tracker.terminal_states` use AO's normalized
+cross-provider vocabulary: `open`, `in_progress`, `review`, `done`, and
+`cancelled`. Workflow dispatch validation rejects other values; in particular,
+Linear's `In Review` state normalizes to `review`, not `in_review`.
+
 ## Manual smoke test
 
 ```bash
