@@ -21,7 +21,11 @@ func configuredGitHubAppTokenSource() (githubTokenSource, bool, error) {
 	if strings.TrimSpace(os.Getenv("AO_GITHUB_TOKEN")) != "" {
 		return nil, false, nil
 	}
-	return githubappauth.NewFromEnvironment(os.Getenv)
+	source, configured, err := githubappauth.NewFromEnvironment(os.Getenv)
+	if source == nil {
+		return nil, configured, err
+	}
+	return source, configured, err
 }
 
 type trackerPromptTokenSource struct {
