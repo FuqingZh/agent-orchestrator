@@ -29,6 +29,10 @@ const (
 	// a non-empty message, before the trailing Enter, so a large multiline paste
 	// does not absorb the Enter and leave the prompt unsubmitted (issue #2342).
 	defaultEnterDelay = 300 * time.Millisecond
+	// Long Codex prompts use bracketed paste and need both a longer settling
+	// delay and an explicit cursor round-trip before submission.
+	longMessageBytes      = 1024
+	longMessageEnterDelay = time.Second
 	// defaultReapGrace is how long Destroy waits between SIGTERM and SIGKILL when
 	// reaping a pane's leftover background processes, giving them a chance to
 	// exit cleanly (release ports) before being forced (issue #2523).
@@ -430,21 +434,33 @@ func (r *Runtime) SendMessage(ctx context.Context, handle ports.RuntimeHandle, m
 		// the Enter are detached from the caller's cancellation (bounded by
 		// their own timeout instead): abandoning mid-pause would strand an
 		// unsubmitted draft that a retried send would then double-paste.
+		enterDelay := r.enterDelayFor(message)
 		var cancel context.CancelFunc
-		enterCtx, cancel = context.WithTimeout(context.WithoutCancel(ctx), r.enterDelay+5*time.Second)
+		enterCtx, cancel = context.WithTimeout(context.WithoutCancel(ctx), enterDelay+5*time.Second)
 		defer cancel()
-		if r.enterDelay > 0 {
+		if enterDelay > 0 {
 			select {
 			case <-enterCtx.Done():
 				return enterCtx.Err()
-			case <-time.After(r.enterDelay):
+			case <-time.After(enterDelay):
 			}
 		}
 	}
-	if _, err := r.run(enterCtx, sendEnterArgs(id)...); err != nil {
+	submitArgs := sendEnterArgs(id)
+	if len(message) >= longMessageBytes {
+		submitArgs = sendLongPasteSubmitArgs(id)
+	}
+	if _, err := r.run(enterCtx, submitArgs...); err != nil {
 		return fmt.Errorf("tmux runtime: send enter %s: %w", id, err)
 	}
 	return nil
+}
+
+func (r *Runtime) enterDelayFor(message string) time.Duration {
+	if len(message) >= longMessageBytes && r.enterDelay < longMessageEnterDelay {
+		return longMessageEnterDelay
+	}
+	return r.enterDelay
 }
 
 // Interrupt sends Ctrl-C to the foreground process without destroying the tmux
