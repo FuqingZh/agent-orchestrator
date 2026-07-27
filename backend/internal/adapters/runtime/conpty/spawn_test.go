@@ -2,6 +2,7 @@ package conpty
 
 import (
 	"reflect"
+	"strings"
 	"testing"
 )
 
@@ -46,6 +47,47 @@ func TestStripEnvAssignments(t *testing.T) {
 			}
 			if !reflect.DeepEqual(gotRest, tt.wantRest) {
 				t.Errorf("rest = %#v, want %#v", gotRest, tt.wantRest)
+			}
+		})
+	}
+}
+
+func TestWorkerEnvironmentStripsAndRejectsDaemonOnlyKeys(t *testing.T) {
+	got, err := workerEnvironment(
+		[]string{"PATH=C:/bin", "AO_LINEAR_API_KEY=ambient-secret"},
+		map[string]string{"ORDINARY": "value"},
+		[]string{"OPENCODE_CONFIG=C:/cfg.json"},
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []string{
+		"PATH=C:/bin",
+		"ORDINARY=value",
+		"OPENCODE_CONFIG=C:/cfg.json",
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("workerEnvironment = %#v, want %#v", got, want)
+	}
+
+	for _, tc := range []struct {
+		name        string
+		env         map[string]string
+		assignments []string
+	}{
+		{
+			name: "map",
+			env:  map[string]string{"AO_LINEAR_OAUTH_TOKEN": "secret"},
+		},
+		{
+			name:        "assignment",
+			assignments: []string{"AO_LINEAR_API_KEY=secret"},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := workerEnvironment(nil, tc.env, tc.assignments)
+			if err == nil || !strings.Contains(err.Error(), "daemon-only env key") {
+				t.Fatalf("workerEnvironment error = %v", err)
 			}
 		})
 	}

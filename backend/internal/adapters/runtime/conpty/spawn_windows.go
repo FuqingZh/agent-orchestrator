@@ -78,13 +78,12 @@ func defaultSpawnHost(ctx context.Context, sessionID, cwd string, argv []string,
 	// Build: <exe> pty-host <sessionID> <cwd> <shellCmd> <shellArgs...>
 	args := append([]string{"pty-host", sessionID, cwd}, argv...)
 
-	// Merge env: inherit parent, overlay caller-provided vars, then apply the
-	// assignments stripped from the argv prefix.
-	merged := os.Environ()
-	for k, v := range env {
-		merged = append(merged, k+"="+v)
+	// Merge env after removing daemon-only credentials from the ambient
+	// environment and rejecting explicit worker reinjection.
+	merged, err := workerEnvironment(os.Environ(), env, envAssignments)
+	if err != nil {
+		return "", 0, err
 	}
-	merged = append(merged, envAssignments...)
 
 	cmd := exec.CommandContext(ctx, exe, args...)
 	cmd.Dir = cwd

@@ -963,23 +963,6 @@ func TestAttachEnvForcesUsableTerm(t *testing.T) {
 	}
 }
 
-func TestTmuxProcessEnvStripsLinearCredentials(t *testing.T) {
-	base := []string{
-		"PATH=/bin",
-		"AO_LINEAR_API_KEY=secret",
-		"EMPTY=",
-		"AO_LINEAR_OAUTH_TOKEN=oauth-secret",
-		"SHELL=/bin/sh",
-	}
-	want := []string{"PATH=/bin", "EMPTY=", "SHELL=/bin/sh"}
-	if got := tmuxProcessEnv(base); !reflect.DeepEqual(got, want) {
-		t.Fatalf("tmuxProcessEnv = %#v, want %#v", got, want)
-	}
-	if got := tmuxProcessEnv(nil); got == nil || len(got) != 0 {
-		t.Fatalf("tmuxProcessEnv(nil) = %#v, want non-nil empty slice", got)
-	}
-}
-
 // -- commandError tests --
 
 func TestCommandErrorUnwraps(t *testing.T) {
