@@ -455,7 +455,7 @@ func normalizedState(state domain.NormalizedIssueState) string {
 
 func renderWorkflowPrompt(candidate workflow.Workflow, issue domain.Issue) (string, error) {
 	description := issue.Body
-	url := issue.URL
+	issueURL := issue.URL
 	labels := make([]string, 0, len(issue.Labels))
 	for _, label := range issue.Labels {
 		labels = append(labels, strings.ToLower(strings.TrimSpace(label)))
@@ -467,7 +467,7 @@ func renderWorkflowPrompt(candidate workflow.Workflow, issue domain.Issue) (stri
 			Title:        issue.Title,
 			Description:  &description,
 			State:        normalizedState(issue.State),
-			URL:          &url,
+			URL:          &issueURL,
 			Labels:       labels,
 			Dispatchable: true,
 		},
