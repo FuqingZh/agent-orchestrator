@@ -9,7 +9,7 @@ import (
 )
 
 func newGitHubTracker() (ports.Tracker, error) {
-	return trackergithub.New(trackergithub.Options{Token: trackergithub.EnvTokenSource{EnvVars: []string{"AO_GITHUB_TOKEN"}}})
+	return trackergithub.New(trackergithub.Options{Token: newTrackerPromptTokenSource()})
 }
 
 func logTrackerDisabled(logger *slog.Logger, err error) {

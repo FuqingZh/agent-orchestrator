@@ -496,6 +496,63 @@ func TestTrackerTokenSourcePrefersAOGitHubToken(t *testing.T) {
 	}
 }
 
+func TestTrackerTokenSourcePrefersGitHubAppOverGlobalToken(t *testing.T) {
+	t.Setenv("AO_GITHUB_TOKEN", "")
+	t.Setenv("GITHUB_TOKEN", "broad-global-token")
+	source := &trackerTokenSource{app: staticGitHubTokenSource("app-installation-token")}
+	token, err := source.Token(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if token != "app-installation-token" {
+		t.Fatalf("token = %q, want GitHub App installation token", token)
+	}
+}
+
+func TestGitHubCredentialsRejectPartialAppWithoutFallback(t *testing.T) {
+	t.Setenv("AO_GITHUB_TOKEN", "")
+	t.Setenv("GITHUB_TOKEN", "broad-global-token")
+	t.Setenv("AO_GITHUB_APP_ID", "4402372")
+	t.Setenv("AO_GITHUB_APP_INSTALLATION_ID", "")
+	t.Setenv("AO_GITHUB_APP_PRIVATE_KEY_FILE", "")
+
+	if _, err := newGitHubSCMProvider(nil); err == nil {
+		t.Fatal("newGitHubSCMProvider accepted partial GitHub App configuration")
+	}
+	if _, err := newTrackerPromptTokenSource().Token(context.Background()); err == nil {
+		t.Fatal("tracker prompt token source fell back past partial GitHub App configuration")
+	}
+	if _, err := newLazyGitHubTracker(nil).tokens.Token(context.Background()); err == nil {
+		t.Fatal("tracker intake token source fell back past partial GitHub App configuration")
+	}
+}
+
+func TestGitHubCredentialsExplicitAOTokenOverridesPartialApp(t *testing.T) {
+	t.Setenv("AO_GITHUB_TOKEN", "explicit-ao-token")
+	t.Setenv("GITHUB_TOKEN", "broad-global-token")
+	t.Setenv("AO_GITHUB_APP_ID", "4402372")
+	t.Setenv("AO_GITHUB_APP_INSTALLATION_ID", "")
+	t.Setenv("AO_GITHUB_APP_PRIVATE_KEY_FILE", "")
+
+	source := newTrackerPromptTokenSource()
+	token, err := source.Token(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if token != "explicit-ao-token" {
+		t.Fatalf("token = %q, want explicit AO_GITHUB_TOKEN", token)
+	}
+	if _, err := newGitHubSCMProvider(nil); err != nil {
+		t.Fatalf("newGitHubSCMProvider rejected explicit AO_GITHUB_TOKEN: %v", err)
+	}
+}
+
+type staticGitHubTokenSource string
+
+func (s staticGitHubTokenSource) Token(context.Context) (string, error) {
+	return string(s), nil
+}
+
 type captureRuntimeSender struct {
 	handle  ports.RuntimeHandle
 	message string
