@@ -2,6 +2,7 @@ package lifecycle
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"log/slog"
@@ -199,7 +200,12 @@ func (m *Manager) ApplyPRObservation(ctx context.Context, id domain.SessionID, o
 		}
 	}
 	humanComments := unresolvedHumanReviewComments(o.Comments)
-	if o.Review == domain.ReviewChangesRequest || len(humanComments) > 0 {
+	botComments := unresolvedBotReviewComments(o.Comments)
+	// An actionable bot comment already carries the concrete changes-requested
+	// feedback. Do not also send the aggregate decision fallback for the same
+	// observation; that fallback remains necessary when no deliverable inline
+	// feedback exists.
+	if len(humanComments) > 0 || (o.Review == domain.ReviewChangesRequest && len(botComments) == 0) {
 		comments := humanComments
 		msg := formatReviewCommentsMessage(comments)
 		if ident != "your PR" {
@@ -214,7 +220,6 @@ func (m *Manager) ApplyPRObservation(ctx context.Context, id domain.SessionID, o
 		}
 		nudges = append(nudges, pendingNudge{key: "review:" + o.URL, sig: sig, msg: msg, maxAttempts: reviewMaxNudge})
 	}
-	botComments := unresolvedBotReviewComments(o.Comments)
 	if len(botComments) > 0 {
 		msg := formatReviewCommentsMessage(botComments)
 		if ident != "your PR" {
@@ -760,15 +765,24 @@ func botReviewCommentsSignature(comments []ports.PRCommentObservation) string {
 	parts := make([]string, 0, len(comments))
 	seen := map[string]bool{}
 	for _, c := range comments {
-		part := strings.TrimSpace(c.SemanticHash)
-		if part == "" {
-			id := strings.TrimSpace(c.ID)
-			threadID := strings.TrimSpace(c.ThreadID)
-			if id == "" && threadID == "" {
-				continue
-			}
-			part = threadID + "\x00" + id
+		id := strings.TrimSpace(c.ID)
+		threadID := strings.TrimSpace(c.ThreadID)
+		if id == "" && threadID == "" {
+			continue
 		}
+		// PRCommentObservation is already the allowlisted delivery projection.
+		// Hash only those delivered fields: a provider thread hash may include
+		// filtered comments and would re-nudge when rejected feedback changes.
+		sum := sha256.Sum256([]byte(strings.Join([]string{
+			threadID,
+			id,
+			c.Author,
+			c.File,
+			fmt.Sprint(c.Line),
+			c.Body,
+			c.URL,
+		}, "\x00")))
+		part := fmt.Sprintf("%x", sum)
 		if !seen[part] {
 			parts = append(parts, part)
 			seen[part] = true
