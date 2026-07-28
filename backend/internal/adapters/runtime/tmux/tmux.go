@@ -18,6 +18,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/runtime/ptyexec"
+	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/runtime/runtimeenv"
 	"github.com/aoagents/agent-orchestrator/backend/internal/domain"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
@@ -135,7 +136,7 @@ type execRunner struct{}
 
 func (execRunner) Run(ctx context.Context, env []string, name string, args ...string) ([]byte, error) {
 	cmd := exec.CommandContext(ctx, name, args...)
-	cmd.Env = append(append([]string(nil), os.Environ()...), env...)
+	cmd.Env = runtimeenv.WithoutDaemonOnly(append(append([]string(nil), os.Environ()...), env...))
 	return cmd.CombinedOutput()
 }
 
@@ -534,7 +535,7 @@ func (r *Runtime) attachCommand(handle ports.RuntimeHandle) ([]string, error) {
 }
 
 func attachEnv(base []string) []string {
-	env := append([]string(nil), base...)
+	env := runtimeenv.WithoutDaemonOnly(base)
 	hasTerm := false
 	hasColorTerm := false
 	for i, kv := range env {
@@ -813,6 +814,9 @@ func validateEnvKeys(env map[string]string) error {
 			return fmt.Errorf("tmux runtime: invalid env key %q", key)
 		}
 	}
+	if err := runtimeenv.ValidateWorkerMap(env); err != nil {
+		return fmt.Errorf("tmux runtime: %w", err)
+	}
 	return nil
 }
 
@@ -861,6 +865,12 @@ func buildLaunchCommand(cfg ports.RuntimeConfig) string {
 	b.WriteString("cd ")
 	b.WriteString(shellQuote(cfg.WorkspacePath))
 	b.WriteString(" || exit; ")
+	// A tmux server can outlive the daemon that created it and retain that
+	// daemon's global environment. Clear daemon-only credentials in every pane,
+	// including panes created after an upgrade connects to an existing server.
+	b.WriteString("unset ")
+	b.WriteString(strings.Join(runtimeenv.DaemonOnlyKeys(), " "))
+	b.WriteString("; ")
 	if _, configured := cfg.Env["NO_COLOR"]; !configured {
 		// The daemon may be launched from another agent or CI environment that
 		// sets NO_COLOR for its own captured output. Do not leak that ambient

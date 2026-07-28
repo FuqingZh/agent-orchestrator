@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/runtime/conpty/ptyregistry"
+	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/runtime/runtimeenv"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
@@ -67,6 +68,9 @@ func (r *Runtime) Create(ctx context.Context, cfg ports.RuntimeConfig) (ports.Ru
 	}
 	if len(cfg.Argv) == 0 {
 		return ports.RuntimeHandle{}, fmt.Errorf("conpty: argv required")
+	}
+	if err := runtimeenv.ValidateWorkerMap(cfg.Env); err != nil {
+		return ports.RuntimeHandle{}, fmt.Errorf("conpty: %w", err)
 	}
 
 	r.mu.Lock()

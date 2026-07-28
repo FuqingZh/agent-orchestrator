@@ -193,6 +193,19 @@ func TestCreateRejectsInvalidEnvKeys(t *testing.T) {
 	}
 }
 
+func TestCreateRejectsDaemonOnlyEnvKeys(t *testing.T) {
+	r, _ := newTestRuntime(0)
+	_, err := r.Create(context.Background(), ports.RuntimeConfig{
+		SessionID:     "sess-1",
+		WorkspacePath: "/tmp/ws",
+		Argv:          []string{"echo", "hi"},
+		Env:           map[string]string{"AO_LINEAR_API_KEY": "secret"},
+	})
+	if err == nil || !strings.Contains(err.Error(), "daemon-only env key") {
+		t.Fatalf("Create err = %v, want daemon-only env key", err)
+	}
+}
+
 // -- Create tests --
 
 func TestCreateIssuesNewSessionAndStatusOff(t *testing.T) {
@@ -932,7 +945,14 @@ func TestAttachCommandRejectsInvalidHandle(t *testing.T) {
 }
 
 func TestAttachEnvForcesUsableTerm(t *testing.T) {
-	env := attachEnv([]string{"PATH=/bin", "TERM=dumb", "COLORTERM=ansi", "SHELL=/bin/sh"})
+	env := attachEnv([]string{
+		"PATH=/bin",
+		"TERM=dumb",
+		"COLORTERM=ansi",
+		"SHELL=/bin/sh",
+		"AO_LINEAR_API_KEY=secret",
+		"AO_LINEAR_OAUTH_TOKEN=oauth-secret",
+	})
 	if got, want := env, []string{"PATH=/bin", "TERM=xterm-256color", "COLORTERM=truecolor", "SHELL=/bin/sh"}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("attachEnv = %#v, want %#v", got, want)
 	}

@@ -5,8 +5,11 @@ package conpty
 
 import (
 	"context"
+	"fmt"
 	"path/filepath"
 	"strings"
+
+	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/runtime/runtimeenv"
 )
 
 // hostSpawner starts a detached pty-host for the session and returns its
@@ -45,4 +48,22 @@ func stripEnvAssignments(argv []string) (assignments, rest []string) {
 		return nil, argv
 	}
 	return argv[1:i], argv[i:]
+}
+
+func workerEnvironment(
+	base []string,
+	env map[string]string,
+	assignments []string,
+) ([]string, error) {
+	if err := runtimeenv.ValidateWorkerMap(env); err != nil {
+		return nil, fmt.Errorf("conpty spawn: %w", err)
+	}
+	if err := runtimeenv.ValidateWorkerAssignments(assignments); err != nil {
+		return nil, fmt.Errorf("conpty spawn: %w", err)
+	}
+	merged := runtimeenv.WithoutDaemonOnly(base)
+	for key, value := range env {
+		merged = append(merged, key+"="+value)
+	}
+	return append(merged, assignments...), nil
 }
