@@ -5,6 +5,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -78,6 +79,34 @@ func TestProjectSetConfig_TrackerIntakeJSON(t *testing.T) {
 	}
 	if !got.Config.TrackerIntake.Enabled || got.Config.TrackerIntake.Provider != "github" || got.Config.TrackerIntake.Assignee != "alice" {
 		t.Fatalf("tracker intake request = %#v", got.Config.TrackerIntake)
+	}
+}
+
+func TestProjectSetConfig_BotReviewFeedbackJSON(t *testing.T) {
+	cfg := setConfigEnv(t)
+	srv, capture := projectServer(t, http.StatusOK, `{"project":{"id":"demo","path":"/repo/demo"}}`)
+	writeRunFileFor(t, cfg, srv)
+
+	_, errOut, err := executeCLI(t, Deps{
+		ProcessAlive: func(int) bool { return true },
+	}, "project", "set-config", "demo", "--config-json", `{
+		"botReviewFeedback":{"allowAuthors":["chatgpt-codex-connector"]},
+		"trackerIntake":{"enabled":true,"provider":"linear","repo":"project-uuid","assignee":"user-uuid","workflowPath":"WORKFLOW.md"}
+	}`)
+	if err != nil {
+		t.Fatalf("unexpected error: %v\nstderr=%s", err, errOut)
+	}
+	var got setConfigRequest
+	if err := json.Unmarshal(capture.body, &got); err != nil {
+		t.Fatalf("decode request: %v\nbody=%s", err, capture.body)
+	}
+	if want := []string{"chatgpt-codex-connector"}; !slices.Equal(got.Config.BotReviewFeedback.AllowAuthors, want) {
+		t.Fatalf("bot review allow authors = %v, want %v", got.Config.BotReviewFeedback.AllowAuthors, want)
+	}
+	if !got.Config.TrackerIntake.Enabled || got.Config.TrackerIntake.Provider != "linear" ||
+		got.Config.TrackerIntake.Repo != "project-uuid" || got.Config.TrackerIntake.Assignee != "user-uuid" ||
+		got.Config.TrackerIntake.WorkflowPath != "WORKFLOW.md" {
+		t.Fatalf("linear tracker config = %#v", got.Config.TrackerIntake)
 	}
 }
 

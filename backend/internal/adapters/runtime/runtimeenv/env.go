@@ -7,9 +7,10 @@ import (
 	"strings"
 )
 
+// LinearAPIKey and LinearOAuthToken identify daemon-only credential environment variables.
 const (
-	LinearAPIKey     = "AO_LINEAR_API_KEY"
-	LinearOAuthToken = "AO_LINEAR_OAUTH_TOKEN"
+	LinearAPIKey     = "AO_LINEAR_API_KEY"     //nolint:gosec // Environment key name, not a credential value.
+	LinearOAuthToken = "AO_LINEAR_OAUTH_TOKEN" //nolint:gosec // Environment key name, not a credential value.
 )
 
 // DaemonOnlyKeys returns environment keys that runtime processes must remove.
