@@ -897,6 +897,26 @@ func TestSCMObservation_AllowlistedBotReviewCommentsNudge(t *testing.T) {
 	}
 }
 
+func TestSCMObservation_ChangesRequestedWithBotCommentsNudgesOnce(t *testing.T) {
+	m, st, msg := newManager()
+	st.sessions["mer-1"] = working("mer-1")
+	st.projects["mer"] = domain.ProjectRecord{ID: "mer", Config: domain.ProjectConfig{
+		BotReviewFeedback: domain.BotReviewFeedbackConfig{AllowAuthors: []string{"github-actions"}},
+	}}
+	o := reactDoctorSCMObservation()
+	o.Review.Decision = string(domain.ReviewChangesRequest)
+
+	if err := m.ApplySCMObservation(ctx, "mer-1", o); err != nil {
+		t.Fatal(err)
+	}
+	if len(msg.msgs) != 1 {
+		t.Fatalf("actionable bot changes-requested feedback should nudge once, got %d: %v", len(msg.msgs), msg.msgs)
+	}
+	if !strings.Contains(msg.msgs[0], "memoize the video props") {
+		t.Fatalf("single nudge should contain the actionable bot feedback:\n%s", msg.msgs[0])
+	}
+}
+
 func TestSCMObservation_DenylistedBotReviewCommentsSuppressed(t *testing.T) {
 	m, st, msg := newManager()
 	st.sessions["mer-1"] = working("mer-1")
@@ -939,6 +959,60 @@ func TestSCMObservation_BotReviewCommentsDedupOnRepeatedObservation(t *testing.T
 	}
 	if len(second.msgs) != 0 {
 		t.Fatalf("repeated bot review observation should dedup after restart, got %d: %v", len(second.msgs), second.msgs)
+	}
+}
+
+func TestSCMObservation_BotReviewDedupIgnoresFilteredCommentEdits(t *testing.T) {
+	st := newFakeStore()
+	st.sessions["mer-1"] = working("mer-1")
+	st.projects["mer"] = domain.ProjectRecord{ID: "mer", Config: domain.ProjectConfig{
+		BotReviewFeedback: domain.BotReviewFeedbackConfig{AllowAuthors: []string{"allowed-bot"}},
+	}}
+	o := ports.SCMObservation{
+		Fetched: true,
+		PR:      ports.SCMPRObservation{URL: "pr1", Number: 1},
+		Review: ports.SCMReviewObservation{
+			Decision: string(domain.ReviewRequired),
+			Threads: []ports.SCMReviewThreadObservation{{
+				ID:           "thread-1",
+				Path:         "main.go",
+				Line:         7,
+				IsBot:        true,
+				SemanticHash: "provider-thread-v1",
+				Comments: []ports.SCMReviewCommentObservation{
+					{ID: "allowed-1", Author: "allowed-bot", Body: "fix the guard", IsBot: true},
+					{ID: "rejected-1", Author: "other-bot", Body: "rejected v1", IsBot: true},
+				},
+			}},
+		},
+	}
+
+	first := &fakeMessenger{}
+	if err := New(st, first).ApplySCMObservation(ctx, "mer-1", o); err != nil {
+		t.Fatalf("first ApplySCMObservation: %v", err)
+	}
+	if len(first.msgs) != 1 {
+		t.Fatalf("first observation should nudge once, got %d: %v", len(first.msgs), first.msgs)
+	}
+
+	o.Review.Threads[0].SemanticHash = "provider-thread-v2"
+	o.Review.Threads[0].Comments[1].Body = "rejected v2"
+	filteredEdit := &fakeMessenger{}
+	if err := New(st, filteredEdit).ApplySCMObservation(ctx, "mer-1", o); err != nil {
+		t.Fatalf("filtered edit ApplySCMObservation: %v", err)
+	}
+	if len(filteredEdit.msgs) != 0 {
+		t.Fatalf("editing rejected feedback must not re-nudge, got %d: %v", len(filteredEdit.msgs), filteredEdit.msgs)
+	}
+
+	o.Review.Threads[0].SemanticHash = "provider-thread-v3"
+	o.Review.Threads[0].Comments[0].Body = "fix the guard and add a test"
+	allowedEdit := &fakeMessenger{}
+	if err := New(st, allowedEdit).ApplySCMObservation(ctx, "mer-1", o); err != nil {
+		t.Fatalf("allowed edit ApplySCMObservation: %v", err)
+	}
+	if len(allowedEdit.msgs) != 1 {
+		t.Fatalf("editing delivered feedback should re-nudge once, got %d: %v", len(allowedEdit.msgs), allowedEdit.msgs)
 	}
 }
 
