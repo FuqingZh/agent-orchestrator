@@ -48,12 +48,24 @@ INSERT INTO projects (
 	if err := db.QueryRow(`
 SELECT COUNT(DISTINCT version_id)
 FROM goose_db_version
-WHERE is_applied = 1 AND version_id IN (28, 29, 30, 31)
+WHERE is_applied = 1 AND version_id IN (28, 29, 30, 31, 40)
 `).Scan(&applied); err != nil {
 		t.Fatalf("query applied migrations: %v", err)
 	}
-	if applied != 4 {
-		t.Fatalf("applied migrations 28-31 = %d, want 4", applied)
+	if applied != 5 {
+		t.Fatalf("applied migrations 28-31 and 40 = %d, want 5", applied)
+	}
+
+	var launchPermissionsColumn int
+	if err := db.QueryRow(`
+SELECT COUNT(*)
+FROM pragma_table_info('sessions')
+WHERE name = 'launch_permissions'
+`).Scan(&launchPermissionsColumn); err != nil {
+		t.Fatalf("query launch_permissions column: %v", err)
+	}
+	if launchPermissionsColumn != 1 {
+		t.Fatalf("launch_permissions columns = %d, want 1", launchPermissionsColumn)
 	}
 
 	var path, displayName string
