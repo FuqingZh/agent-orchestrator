@@ -203,6 +203,9 @@ func TestCommandBuilders(t *testing.T) {
 	if got, want := sendEnterArgs("sess-1"), []string{"send-keys", "-t", "sess-1", "Enter"}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("sendEnterArgs = %#v, want %#v", got, want)
 	}
+	if got, want := sendTabArgs("sess-1"), []string{"send-keys", "-t", "sess-1", "Tab"}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("sendTabArgs = %#v, want %#v", got, want)
+	}
 	if got, want := sendInterruptArgs("sess-1"), []string{"send-keys", "-t", "sess-1", "C-c"}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("sendInterruptArgs = %#v, want %#v", got, want)
 	}
@@ -968,6 +971,19 @@ func TestSendMessageDelaysBeforeEnter(t *testing.T) {
 	}
 	if got, want := frNudge.calls[0].args, sendEnterArgs("sess-1"); !reflect.DeepEqual(got, want) {
 		t.Fatalf("nudge Enter args = %#v, want %#v", got, want)
+	}
+}
+
+func TestSendCodexSubmitNudgeUsesTab(t *testing.T) {
+	r, fr := newTestRuntime(0)
+	if err := r.SendCodexSubmitNudge(context.Background(), ports.RuntimeHandle{ID: "sess-1"}); err != nil {
+		t.Fatalf("SendCodexSubmitNudge: %v", err)
+	}
+	if len(fr.calls) != 1 {
+		t.Fatalf("calls = %d, want 1", len(fr.calls))
+	}
+	if got, want := fr.calls[0].args, sendTabArgs("sess-1"); !reflect.DeepEqual(got, want) {
+		t.Fatalf("Tab args = %#v, want %#v", got, want)
 	}
 }
 

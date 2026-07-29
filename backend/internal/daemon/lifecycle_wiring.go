@@ -218,6 +218,14 @@ type runtimeMessageSender interface {
 	SendMessage(ctx context.Context, handle ports.RuntimeHandle, message string) error
 }
 
+// codexSubmitNudger is an optional tmux capability. Codex can absorb Enter as
+// pasted input immediately after a multiline prompt; Tab ends that paste burst
+// and submits while Codex is idle. The durable session facts below strictly
+// gate its use so other harnesses retain the generic Enter nudge.
+type codexSubmitNudger interface {
+	SendCodexSubmitNudge(ctx context.Context, handle ports.RuntimeHandle) error
+}
+
 // runtimeMessenger sends the user's message directly to the session's live
 // runtime pane. The HTTP controller has already validated and sanitized the
 // message body; this adapter only resolves the stored runtime handle.
@@ -241,7 +249,15 @@ func (m runtimeMessenger) Send(ctx context.Context, id domain.SessionID, message
 	if handleID == "" {
 		return fmt.Errorf("session %s: %w", id, sessionmanager.ErrIncompleteHandle)
 	}
-	return m.runtime.SendMessage(ctx, ports.RuntimeHandle{ID: handleID}, message)
+	handle := ports.RuntimeHandle{ID: handleID}
+	if message == "" &&
+		rec.Harness == domain.HarnessCodex &&
+		rec.Metadata.Permissions == domain.PermissionModeBypassPermissions {
+		if nudger, ok := m.runtime.(codexSubmitNudger); ok {
+			return nudger.SendCodexSubmitNudge(ctx, handle)
+		}
+	}
+	return m.runtime.SendMessage(ctx, handle, message)
 }
 
 // newSessionMessenger assembles the per-daemon agent messenger. For now, ao

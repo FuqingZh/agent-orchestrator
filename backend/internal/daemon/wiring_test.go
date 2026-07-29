@@ -396,13 +396,22 @@ func TestTrackerTokenSourcePrefersAOGitHubToken(t *testing.T) {
 }
 
 type captureRuntimeSender struct {
-	handle  ports.RuntimeHandle
-	message string
+	handle       ports.RuntimeHandle
+	message      string
+	messageCalls int
+	codexNudges  int
 }
 
 func (c *captureRuntimeSender) SendMessage(_ context.Context, handle ports.RuntimeHandle, message string) error {
 	c.handle = handle
 	c.message = message
+	c.messageCalls++
+	return nil
+}
+
+func (c *captureRuntimeSender) SendCodexSubmitNudge(_ context.Context, handle ports.RuntimeHandle) error {
+	c.handle = handle
+	c.codexNudges++
 	return nil
 }
 
@@ -438,6 +447,75 @@ func TestWiring_SessionMessengerSendsToRuntimePane(t *testing.T) {
 	}
 	if runtime.message != "hello agent" {
 		t.Fatalf("message = %q, want hello agent", runtime.message)
+	}
+}
+
+func TestWiring_SessionMessengerSelectsCodexTabNudge(t *testing.T) {
+	tests := []struct {
+		name            string
+		harness         domain.AgentHarness
+		permissions     domain.PermissionMode
+		wantCodexNudges int
+		wantMessages    int
+	}{
+		{
+			name:            "Codex bypass session uses Tab",
+			harness:         domain.HarnessCodex,
+			permissions:     domain.PermissionModeBypassPermissions,
+			wantCodexNudges: 1,
+		},
+		{
+			name:         "Codex default session keeps generic Enter",
+			harness:      domain.HarnessCodex,
+			permissions:  domain.PermissionModeDefault,
+			wantMessages: 1,
+		},
+		{
+			name:         "non-Codex bypass session keeps generic Enter",
+			harness:      domain.HarnessClaudeCode,
+			permissions:  domain.PermissionModeBypassPermissions,
+			wantMessages: 1,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			store, err := sqlite.Open(t.TempDir())
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { _ = store.Close() })
+
+			ctx := context.Background()
+			if err := store.UpsertProject(ctx, domain.ProjectRecord{ID: "p", Path: "/repo/p", RegisteredAt: time.Now()}); err != nil {
+				t.Fatal(err)
+			}
+			rec, err := store.CreateSession(ctx, domain.SessionRecord{
+				ProjectID: "p",
+				Kind:      domain.KindWorker,
+				Harness:   tt.harness,
+				Activity:  domain.Activity{State: domain.ActivityIdle, LastActivityAt: time.Now()},
+				Metadata: domain.SessionMetadata{
+					RuntimeHandleID: "ao-1/terminal_0",
+					Permissions:     tt.permissions,
+				},
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			runtime := &captureRuntimeSender{}
+			messenger := newSessionMessenger(store, runtime, nil)
+			if err := messenger.Send(ctx, rec.ID, ""); err != nil {
+				t.Fatalf("messenger.Send: %v", err)
+			}
+			if runtime.codexNudges != tt.wantCodexNudges {
+				t.Fatalf("Codex nudges = %d, want %d", runtime.codexNudges, tt.wantCodexNudges)
+			}
+			if runtime.messageCalls != tt.wantMessages {
+				t.Fatalf("message calls = %d, want %d", runtime.messageCalls, tt.wantMessages)
+			}
+		})
 	}
 }
 

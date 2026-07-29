@@ -112,6 +112,13 @@ func sendEnterArgs(id string) []string {
 	return []string{"send-keys", "-t", id, "Enter"}
 }
 
+// sendTabArgs builds args for `tmux send-keys -t <id> Tab`. Codex treats Tab
+// as queue/submit after a paste burst, while Enter can still be classified as
+// part of the pasted multiline input.
+func sendTabArgs(id string) []string {
+	return []string{"send-keys", "-t", id, "Tab"}
+}
+
 // sendInterruptArgs builds args for `tmux send-keys -t <id> C-c` to interrupt
 // the foreground process without killing the terminal session.
 func sendInterruptArgs(id string) []string {

@@ -536,6 +536,25 @@ func (r *Runtime) SendMessage(ctx context.Context, handle ports.RuntimeHandle, m
 	return nil
 }
 
+// SendCodexSubmitNudge submits a draft already present in the Codex composer.
+// Codex uses Tab as its queue key and, while idle, handles it like submit.
+// Unlike Enter, Tab also terminates Codex's rapid-paste classification, so a
+// lifecycle confirmation cannot be absorbed as another multiline paste.
+//
+// This is intentionally not part of ports.Runtime. The daemon discovers it as
+// an optional tmux capability only for a durable Codex bypass-permissions
+// session, leaving every other harness on the runtime-neutral Enter contract.
+func (r *Runtime) SendCodexSubmitNudge(ctx context.Context, handle ports.RuntimeHandle) error {
+	id, err := handleID(handle)
+	if err != nil {
+		return err
+	}
+	if _, err := r.run(ctx, sendTabArgs(id)...); err != nil {
+		return fmt.Errorf("tmux runtime: send Codex submit nudge %s: %w", id, err)
+	}
+	return nil
+}
+
 func sendCompletionBudget(chunkCount int, commandTimeout, enterDelay time.Duration) time.Duration {
 	return time.Duration(chunkCount)*commandTimeout + enterDelay
 }
