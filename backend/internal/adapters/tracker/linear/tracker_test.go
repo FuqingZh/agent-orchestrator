@@ -129,6 +129,26 @@ func TestGetMapsLinearIssue(t *testing.T) {
 	}
 }
 
+func TestGetMapsCanceledLinearIssue(t *testing.T) {
+	f := newFakeLinear(t, func(w http.ResponseWriter, _ map[string]any) {
+		_, _ = io.WriteString(w, `{"data":{"issue":{
+			"id":"issue-uuid","identifier":"FUQ-17","title":"Cancel canary",
+			"state":{"name":"Canceled","type":"canceled"},
+			"labels":{"nodes":[]}
+		}}}`)
+	})
+	issue, err := newTrackerForTest(t, f).Get(context.Background(), domain.TrackerID{
+		Provider: domain.TrackerProviderLinear,
+		Native:   "FUQ-17",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if issue.State != domain.IssueCancelled {
+		t.Fatalf("issue state = %q, want %q", issue.State, domain.IssueCancelled)
+	}
+}
+
 func TestListPaginatesProjectAndFilters(t *testing.T) {
 	page := 0
 	f := newFakeLinear(t, func(w http.ResponseWriter, request map[string]any) {
