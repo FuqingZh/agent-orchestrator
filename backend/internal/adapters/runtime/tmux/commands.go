@@ -106,19 +106,10 @@ func sendKeysLiteralArgs(id, chunk string) []string {
 	return []string{"send-keys", "-t", id, "-l", chunk}
 }
 
-// sendEnterArgs builds args for `tmux send-keys -t <id> C-m` to submit the
-// queued input. C-m is the terminal carriage-return byte expected by interactive
-// TUIs; using tmux's named Enter key is not reliable after bracketed pastes.
+// sendEnterArgs builds args for `tmux send-keys -t <id> Enter` to submit the
+// queued input.
 func sendEnterArgs(id string) []string {
-	return []string{"send-keys", "-t", id, "C-m"}
-}
-
-// sendLongPasteSubmitArgs commits a bracketed paste before submitting it.
-// Codex's TUI can leave a long paste in its editor after a bare Enter. Moving
-// the cursor once in each direction first turns the paste into ordinary editor
-// input, after which C-m reliably submits it.
-func sendLongPasteSubmitArgs(id string) []string {
-	return []string{"send-keys", "-t", id, "Left", "Right", "C-m"}
+	return []string{"send-keys", "-t", id, "Enter"}
 }
 
 // sendInterruptArgs builds args for `tmux send-keys -t <id> C-c` to interrupt

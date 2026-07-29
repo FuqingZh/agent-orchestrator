@@ -3790,8 +3790,6 @@ components:
           type: string
         repo:
           type: string
-        workflowPath:
-          type: string
       type: object
     TriggerReviewResponse:
       properties:

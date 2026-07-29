@@ -125,17 +125,19 @@ closed and does not fall back to a broader host credential.
 
 ### Linear credentials
 
-Linear workflow intake uses exactly one explicitly AO-scoped credential:
+Linear issue intake uses exactly one explicitly AO-scoped credential:
 
 | Variable                | Purpose |
 | ----------------------- | ------- |
 | `AO_LINEAR_API_KEY`     | Personal API key, sent as Linear's raw `Authorization` value. |
 | `AO_LINEAR_OAUTH_TOKEN` | OAuth access token, sent with the `Bearer` scheme. |
 
-Configuring both variables fails closed. Linear intake is available only
-through a Symphony workflow and requires `tracker.provider.project` to name a
-Linear project UUID. The daemon reads tracker state; tracker writes remain
-agent-owned.
+Configuring both variables fails closed. Enable Linear intake per project with
+`--tracker-intake --tracker-provider linear --tracker-repo PROJECT_UUID
+--tracker-assignee USER_ID`. The project UUID and assignee are explicit safety
+boundaries; AO does not infer or broaden either value. The daemon reads tracker
+state and starts one worker for each matching open issue. Tracker writes remain
+agent- or human-owned.
 
 AO removes both Linear credential variables from the ambient environment before
 launching tmux or a Windows ConPTY host, and project worker configuration may
@@ -144,10 +146,10 @@ variables so an older, still-running server cannot reintroduce them into new
 panes. These are inheritance guards, not operating-system isolation from a
 permissionless worker running as the same user.
 
-`tracker.active_states` and `tracker.terminal_states` use AO's normalized
-cross-provider vocabulary: `open`, `in_progress`, `review`, `done`, and
-`cancelled`. Workflow dispatch validation rejects other values; in particular,
-Linear's `In Review` state normalizes to `review`, not `in_review`.
+AO stores the stable Linear issue UUID as `linear:<uuid>` in the session. A
+live session suppresses duplicate intake; a terminated session can be recreated
+while the issue remains open and eligible. Completed and cancelled Linear
+issues are not intake candidates.
 
 ## Manual smoke test
 

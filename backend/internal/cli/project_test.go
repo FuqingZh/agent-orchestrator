@@ -91,7 +91,7 @@ func TestProjectSetConfig_BotReviewFeedbackJSON(t *testing.T) {
 		ProcessAlive: func(int) bool { return true },
 	}, "project", "set-config", "demo", "--config-json", `{
 		"botReviewFeedback":{"allowAuthors":["chatgpt-codex-connector"]},
-		"trackerIntake":{"enabled":true,"provider":"linear","repo":"project-uuid","assignee":"user-uuid","workflowPath":"WORKFLOW.md"}
+		"trackerIntake":{"enabled":true,"provider":"linear","repo":"project-uuid","assignee":"user-uuid"}
 	}`)
 	if err != nil {
 		t.Fatalf("unexpected error: %v\nstderr=%s", err, errOut)
@@ -104,20 +104,19 @@ func TestProjectSetConfig_BotReviewFeedbackJSON(t *testing.T) {
 		t.Fatalf("bot review allow authors = %v, want %v", got.Config.BotReviewFeedback.AllowAuthors, want)
 	}
 	if !got.Config.TrackerIntake.Enabled || got.Config.TrackerIntake.Provider != "linear" ||
-		got.Config.TrackerIntake.Repo != "project-uuid" || got.Config.TrackerIntake.Assignee != "user-uuid" ||
-		got.Config.TrackerIntake.WorkflowPath != "WORKFLOW.md" {
+		got.Config.TrackerIntake.Repo != "project-uuid" || got.Config.TrackerIntake.Assignee != "user-uuid" {
 		t.Fatalf("linear tracker config = %#v", got.Config.TrackerIntake)
 	}
 }
 
-func TestProjectSetConfig_TrackerWorkflowFlag(t *testing.T) {
+func TestProjectSetConfig_LinearTrackerFlags(t *testing.T) {
 	cfg := setConfigEnv(t)
 	srv, capture := projectServer(t, http.StatusOK, `{"project":{"id":"demo","path":"/repo/demo"}}`)
 	writeRunFileFor(t, cfg, srv)
 
 	_, errOut, err := executeCLI(t, Deps{
 		ProcessAlive: func(int) bool { return true },
-	}, "project", "set-config", "demo", "--tracker-intake", "--tracker-workflow", "WORKFLOW.md")
+	}, "project", "set-config", "demo", "--tracker-intake", "--tracker-provider", "linear", "--tracker-repo", "project-uuid", "--tracker-assignee", "user-uuid")
 	if err != nil {
 		t.Fatalf("unexpected error: %v\nstderr=%s", err, errOut)
 	}
@@ -125,8 +124,9 @@ func TestProjectSetConfig_TrackerWorkflowFlag(t *testing.T) {
 	if err := json.Unmarshal(capture.body, &got); err != nil {
 		t.Fatalf("decode request: %v\nbody=%s", err, capture.body)
 	}
-	if !got.Config.TrackerIntake.Enabled || got.Config.TrackerIntake.Provider != "github" || got.Config.TrackerIntake.WorkflowPath != "WORKFLOW.md" {
-		t.Fatalf("tracker workflow request = %#v", got.Config.TrackerIntake)
+	if !got.Config.TrackerIntake.Enabled || got.Config.TrackerIntake.Provider != "linear" ||
+		got.Config.TrackerIntake.Repo != "project-uuid" || got.Config.TrackerIntake.Assignee != "user-uuid" {
+		t.Fatalf("linear tracker request = %#v", got.Config.TrackerIntake)
 	}
 }
 
@@ -144,31 +144,18 @@ func TestBuildProjectConfigTrackerIntakeFlags(t *testing.T) {
 	}
 }
 
-func TestBuildProjectConfigTrackerWorkflowFlag(t *testing.T) {
-	got, err := buildProjectConfig(projectSetConfigOptions{
-		trackerIntake:   true,
-		trackerWorkflow: "WORKFLOW.md",
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !got.TrackerIntake.Enabled || got.TrackerIntake.Provider != "github" || got.TrackerIntake.WorkflowPath != "WORKFLOW.md" {
-		t.Fatalf("tracker workflow config = %#v", got.TrackerIntake)
-	}
-}
-
-func TestBuildProjectConfigLinearWorkflowFlags(t *testing.T) {
+func TestBuildProjectConfigLinearTrackerFlags(t *testing.T) {
 	got, err := buildProjectConfig(projectSetConfigOptions{
 		trackerIntake:   true,
 		trackerProvider: "linear",
 		trackerRepo:     "project-uuid",
-		trackerWorkflow: "WORKFLOW.md",
+		trackerAssignee: "user-uuid",
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
 	if !got.TrackerIntake.Enabled || got.TrackerIntake.Provider != "linear" ||
-		got.TrackerIntake.Repo != "project-uuid" || got.TrackerIntake.WorkflowPath != "WORKFLOW.md" {
+		got.TrackerIntake.Repo != "project-uuid" || got.TrackerIntake.Assignee != "user-uuid" {
 		t.Fatalf("linear tracker config = %#v", got.TrackerIntake)
 	}
 }

@@ -155,7 +155,6 @@ ao project set-config <id> [flags]
 | `--tracker-intake` | Enable issue intake | - |
 | `--tracker-provider string` | `github` or `linear`; defaults to `github` | - |
 | `--tracker-repo string` | GitHub `owner/repo` or Linear project UUID | - |
-| `--tracker-workflow string` | Repo-relative Symphony `WORKFLOW.md` path | - |
 | `--worker-agent string` | Harness override for worker sessions | - |
 
 **Examples:**
@@ -181,12 +180,13 @@ ao project set-config agent-orchestrator --agent-rules-file docs/ao-worker-rules
 ```
 
 ```bash
-# Opt into workflow-driven GitHub issue intake
-ao project set-config agent-orchestrator --tracker-intake --tracker-workflow WORKFLOW.md
+# Opt into assignee-scoped GitHub issue intake
+ao project set-config agent-orchestrator --tracker-intake \
+  --tracker-assignee FuqingZh
 ```
 
 ```bash
-# Opt into project-scoped Linear workflow intake
+# Opt into project- and assignee-scoped Linear intake
 ao project set-config agent-orchestrator --tracker-intake --tracker-provider linear \
-  --tracker-repo PROJECT_UUID --tracker-workflow WORKFLOW.md
+  --tracker-repo PROJECT_UUID --tracker-assignee USER_ID
 ```

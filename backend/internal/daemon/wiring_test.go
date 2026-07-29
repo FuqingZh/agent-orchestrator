@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -387,21 +388,7 @@ func TestStartTrackerIntake_RunsEvenWithoutEnabledProjects(t *testing.T) {
 	}
 }
 
-func TestStartTrackerIntake_MockGitHubWorkflowSmoke(t *testing.T) {
-	projectPath := t.TempDir()
-	workflow := `---
-tracker:
-  kind: github
-  provider:
-    repo: acme/demo
-    assignee: alice
-  required_labels: [symphony]
----
-Implement {{ issue.identifier }}: {{ issue.title }}
-`
-	if err := os.WriteFile(filepath.Join(projectPath, "WORKFLOW.md"), []byte(workflow), 0o600); err != nil {
-		t.Fatal(err)
-	}
+func TestStartTrackerIntake_MockGitHubSmoke(t *testing.T) {
 	store, err := sqlite.Open(t.TempDir())
 	if err != nil {
 		t.Fatal(err)
@@ -409,11 +396,12 @@ Implement {{ issue.identifier }}: {{ issue.title }}
 	t.Cleanup(func() { _ = store.Close() })
 	if err := store.UpsertProject(context.Background(), domain.ProjectRecord{
 		ID:            "demo",
-		Path:          projectPath,
+		Path:          t.TempDir(),
 		RepoOriginURL: "https://github.com/acme/demo.git",
 		Config: domain.ProjectConfig{TrackerIntake: domain.TrackerIntakeConfig{
-			Enabled:      true,
-			WorkflowPath: "WORKFLOW.md",
+			Enabled:  true,
+			Repo:     "acme/demo",
+			Assignee: "alice",
 		}},
 	}); err != nil {
 		t.Fatal(err)
@@ -432,7 +420,7 @@ Implement {{ issue.identifier }}: {{ issue.title }}
 			"body": "exercise the real adapter",
 			"state": "open",
 			"html_url": "https://github.com/acme/demo/issues/7",
-			"labels": [{"name":"symphony"}],
+			"labels": [{"name":"agent-ready"}],
 			"assignees": [{"login":"alice"}]
 		}]`)
 	}))
@@ -462,7 +450,8 @@ Implement {{ issue.identifier }}: {{ issue.title }}
 	select {
 	case call := <-spawner.calls:
 		if call.ProjectID != "demo" || call.IssueID != "github:acme/demo#7" ||
-			call.Prompt != "Implement acme/demo#7: daemon smoke" {
+			!strings.Contains(call.Prompt, "daemon smoke") ||
+			!strings.Contains(call.Prompt, "exercise the real adapter") {
 			t.Fatalf("spawn call = %+v", call)
 		}
 	case <-time.After(2 * time.Second):
@@ -810,6 +799,8 @@ func (f *fakeSessionLifecycle) RestoreAll(_ context.Context) error {
 	f.restoreAllCalled = true
 	return f.restoreErr
 }
+
+func (f *fakeSessionLifecycle) SetShellTerminalCloser(sessionmanager.ShellTerminalCloser) {}
 
 // TestWiring_SessionLifecycleInterfaceInvokedByDaemon asserts the
 // sessionLifecycle interface is satisfied by *sessionmanager.Manager (compile
