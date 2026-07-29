@@ -5,8 +5,6 @@ import (
 	"errors"
 	"io"
 	"log/slog"
-	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -15,518 +13,14 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
-func TestPollWorkflowRendersPromptAndFiltersEligibility(t *testing.T) {
-	projectPath := t.TempDir()
-	writeIntakeWorkflow(t, projectPath, `---
-tracker:
-  kind: github
-  provider:
-    repo: acme/demo
-    assignee: alice
-  required_labels: [symphony]
-  active_states: [open]
-agent:
-  max_concurrent_agents: 4
----
-Implement {{ issue.identifier }}: {{ issue.title }}
-Labels: {{ issue.labels }}
-`)
+func TestPollSpawnsWorkerForEligibleIssue(t *testing.T) {
 	store := &fakeStore{projects: []domain.ProjectRecord{{
-		ID:   "demo",
-		Path: projectPath,
+		ID:            "demo",
+		RepoOriginURL: "https://github.com/acme/demo.git",
 		Config: domain.ProjectConfig{TrackerIntake: domain.TrackerIntakeConfig{
-			Enabled:      true,
-			WorkflowPath: "WORKFLOW.md",
+			Enabled: true, Assignee: "alice",
 		}},
 	}}}
-	tracker := &fakeTracker{issues: []domain.Issue{
-		{ID: domain.TrackerID{Provider: domain.TrackerProviderGitHub, Native: "acme/demo#1"}, Title: "missing label", State: domain.IssueOpen, Assignees: []string{"alice"}},
-		{ID: domain.TrackerID{Provider: domain.TrackerProviderGitHub, Native: "acme/demo#2"}, Title: "eligible", State: domain.IssueOpen, Labels: []string{"SYMPHONY"}, Assignees: []string{"Alice"}},
-	}}
-	spawner := &fakeSpawner{}
-
-	if err := New(singleResolver(tracker), store, spawner, Config{Logger: discardLogger()}).Poll(context.Background()); err != nil {
-		t.Fatalf("Poll() error = %v", err)
-	}
-	if len(spawner.calls) != 1 {
-		t.Fatalf("spawn calls = %+v, want one", spawner.calls)
-	}
-	if got, want := spawner.calls[0].Prompt, "Implement acme/demo#2: eligible\nLabels: symphony"; got != want {
-		t.Fatalf("prompt = %q, want %q", got, want)
-	}
-	if got := tracker.filters[0]; got.Assignee != "alice" || !equalStrings(got.Labels, []string{"symphony"}) {
-		t.Fatalf("tracker filter = %+v", got)
-	}
-}
-
-func TestPollWorkflowEnforcesProjectAndStateConcurrency(t *testing.T) {
-	projectPath := t.TempDir()
-	writeIntakeWorkflow(t, projectPath, `---
-tracker:
-  kind: github
-  provider:
-    assignee: alice
-  active_states: [open]
-agent:
-  max_concurrent_agents: 3
-  max_concurrent_agents_by_state:
-    open: 2
----
-{{ issue.identifier }}
-`)
-	store := &fakeStore{projects: []domain.ProjectRecord{workflowProject("demo", projectPath)}}
-	tracker := &fakeTracker{issues: []domain.Issue{
-		workflowIssue("acme/demo#1"),
-		workflowIssue("acme/demo#2"),
-		workflowIssue("acme/demo#3"),
-		workflowIssue("acme/demo#4"),
-	}}
-	spawner := &fakeSpawner{}
-
-	if err := New(singleResolver(tracker), store, spawner, Config{MaxWorkflowSessions: 4, Logger: discardLogger()}).Poll(context.Background()); err != nil {
-		t.Fatalf("Poll() error = %v", err)
-	}
-	if len(spawner.calls) != 2 {
-		t.Fatalf("spawn calls = %d, want state limit 2", len(spawner.calls))
-	}
-}
-
-func TestPollWorkflowEnforcesGlobalConcurrencyAcrossProjects(t *testing.T) {
-	firstPath := t.TempDir()
-	secondPath := t.TempDir()
-	for _, path := range []string{firstPath, secondPath} {
-		writeIntakeWorkflow(t, path, `---
-tracker:
-  kind: github
-  provider:
-    assignee: alice
-  active_states: [open]
-agent:
-  max_concurrent_agents: 4
----
-{{ issue.identifier }}
-`)
-	}
-	store := &fakeStore{projects: []domain.ProjectRecord{
-		workflowProject("first", firstPath),
-		workflowProject("second", secondPath),
-	}}
-	tracker := &fakeTracker{issuesByRepo: map[string][]domain.Issue{
-		"acme/first":  {workflowIssue("acme/first#1"), workflowIssue("acme/first#2")},
-		"acme/second": {workflowIssue("acme/second#1"), workflowIssue("acme/second#2")},
-	}}
-	spawner := &fakeSpawner{}
-
-	if err := New(singleResolver(tracker), store, spawner, Config{MaxWorkflowSessions: 3, Logger: discardLogger()}).Poll(context.Background()); err != nil {
-		t.Fatalf("Poll() error = %v", err)
-	}
-	if len(spawner.calls) != 3 {
-		t.Fatalf("spawn calls = %d, want global limit 3", len(spawner.calls))
-	}
-}
-
-func TestStartAppliesWorkflowPollingInterval(t *testing.T) {
-	projectPath := t.TempDir()
-	writeIntakeWorkflow(t, projectPath, `---
-tracker:
-  kind: github
-  provider:
-    assignee: alice
-polling:
-  interval_ms: 10
----
-{{ issue.identifier }}
-`)
-	tracker := &pollSignalTracker{calls: make(chan struct{}, 3)}
-	observer := New(
-		singleResolver(tracker),
-		&fakeStore{projects: []domain.ProjectRecord{workflowProject("demo", projectPath)}},
-		&fakeSpawner{},
-		Config{Tick: time.Hour, Logger: discardLogger()},
-	)
-	ctx, cancel := context.WithCancel(context.Background())
-	done := observer.Start(ctx)
-	t.Cleanup(func() {
-		cancel()
-		<-done
-	})
-
-	for call := 1; call <= 2; call++ {
-		select {
-		case <-tracker.calls:
-		case <-time.After(500 * time.Millisecond):
-			t.Fatalf("tracker list call %d did not use workflow polling interval", call)
-		}
-	}
-}
-
-func TestPollWorkflowCountsExistingSessionsAgainstLimits(t *testing.T) {
-	projectPath := t.TempDir()
-	writeIntakeWorkflow(t, projectPath, `---
-tracker:
-  kind: github
-  provider:
-    assignee: alice
-agent:
-  max_concurrent_agents: 2
----
-{{ issue.identifier }}
-`)
-	store := &fakeStore{
-		projects: []domain.ProjectRecord{workflowProject("demo", projectPath)},
-		sessions: []domain.SessionRecord{{
-			ID:        "demo-1",
-			ProjectID: "demo",
-			IssueID:   "github:acme/demo#existing",
-		}},
-	}
-	tracker := &fakeTracker{issues: []domain.Issue{
-		workflowIssue("acme/demo#2"),
-		workflowIssue("acme/demo#3"),
-	}}
-	spawner := &fakeSpawner{}
-
-	if err := New(singleResolver(tracker), store, spawner, Config{Logger: discardLogger()}).Poll(context.Background()); err != nil {
-		t.Fatalf("Poll() error = %v", err)
-	}
-	if len(spawner.calls) != 1 {
-		t.Fatalf("spawn calls = %d, want one remaining project slot", len(spawner.calls))
-	}
-}
-
-func TestPollWorkflowInvalidReloadRetainsLastKnownGood(t *testing.T) {
-	projectPath := t.TempDir()
-	valid := `---
-tracker:
-  kind: github
-  provider:
-    assignee: alice
----
-Valid {{ issue.identifier }}
-`
-	writeIntakeWorkflow(t, projectPath, valid)
-	store := &fakeStore{projects: []domain.ProjectRecord{workflowProject("demo", projectPath)}}
-	tracker := &fakeTracker{issues: []domain.Issue{workflowIssue("acme/demo#1")}}
-	spawner := &fakeSpawner{}
-	observer := New(singleResolver(tracker), store, spawner, Config{Logger: discardLogger()})
-
-	if err := observer.Poll(context.Background()); err != nil {
-		t.Fatal(err)
-	}
-	writeIntakeWorkflow(t, projectPath, "---\ntracker: [\n---\nBroken\n")
-	tracker.issues = []domain.Issue{workflowIssue("acme/demo#2")}
-	if err := observer.Poll(context.Background()); err != nil {
-		t.Fatal(err)
-	}
-	if len(spawner.calls) != 2 || spawner.calls[1].Prompt != "Valid acme/demo#2" {
-		t.Fatalf("spawn calls after invalid reload = %+v", spawner.calls)
-	}
-}
-
-func TestPollWorkflowTemplateFailureDoesNotSpawn(t *testing.T) {
-	projectPath := t.TempDir()
-	writeIntakeWorkflow(t, projectPath, `---
-tracker:
-  kind: github
-  provider:
-    assignee: alice
----
-{{ issue.unknown }}
-`)
-	store := &fakeStore{projects: []domain.ProjectRecord{workflowProject("demo", projectPath)}}
-	spawner := &fakeSpawner{}
-	if err := New(singleResolver(&fakeTracker{issues: []domain.Issue{workflowIssue("acme/demo#1")}}), store, spawner, Config{Logger: discardLogger()}).Poll(context.Background()); err != nil {
-		t.Fatalf("Poll() error = %v", err)
-	}
-	if len(spawner.calls) != 0 {
-		t.Fatalf("spawn calls = %+v, want none", spawner.calls)
-	}
-}
-
-func TestPollWorkflowDurableClaimBlocksDuplicateAfterReconstruction(t *testing.T) {
-	projectPath := t.TempDir()
-	writeIntakeWorkflow(t, projectPath, `---
-tracker:
-  kind: github
-  provider:
-    assignee: alice
----
-{{ issue.identifier }}
-`)
-	store := &fakeStore{projects: []domain.ProjectRecord{workflowProject("demo", projectPath)}}
-	tracker := &fakeTracker{issues: []domain.Issue{workflowIssue("acme/demo#1")}}
-	firstSpawner := &fakeSpawner{}
-	if err := New(singleResolver(tracker), store, firstSpawner, Config{Logger: discardLogger()}).Poll(context.Background()); err != nil {
-		t.Fatal(err)
-	}
-	if len(firstSpawner.calls) != 1 {
-		t.Fatalf("first observer spawn calls = %d, want 1", len(firstSpawner.calls))
-	}
-
-	// Simulate a daemon crash after reserving but before the session identity is
-	// durably bound. The reconstructed observer has no in-memory snapshot, but
-	// the durable claimed row remains authoritative.
-	key := workflowRunKey("demo", CanonicalIssueID(tracker.issues[0].ID))
-	run := store.workflowRuns[key]
-	run.State = domain.WorkflowRunClaimed
-	run.SessionID = ""
-	store.workflowRuns[key] = run
-	secondSpawner := &fakeSpawner{}
-	if err := New(singleResolver(tracker), store, secondSpawner, Config{Logger: discardLogger()}).Poll(context.Background()); err != nil {
-		t.Fatal(err)
-	}
-	if len(secondSpawner.calls) != 0 {
-		t.Fatalf("reconstructed observer spawn calls = %+v, want none", secondSpawner.calls)
-	}
-}
-
-func TestPollWorkflowRecoversStaleOrphanClaim(t *testing.T) {
-	projectPath := t.TempDir()
-	writeIntakeWorkflow(t, projectPath, `---
-tracker:
-  kind: github
-  provider:
-    assignee: alice
-  active_states: [open]
----
-{{ issue.identifier }}
-`)
-	now := time.Date(2026, 7, 26, 10, 0, 0, 0, time.UTC)
-	issue := workflowIssue("acme/demo#1")
-	issueID := CanonicalIssueID(issue.ID)
-	store := &fakeStore{
-		projects: []domain.ProjectRecord{workflowProject("demo", projectPath)},
-		workflowRuns: map[string]domain.WorkflowRunRecord{
-			workflowRunKey("demo", issueID): {
-				ProjectID: "demo", IssueID: issueID, WorkflowRevision: "rev-1",
-				State: domain.WorkflowRunClaimed, UpdatedAt: now.Add(-2 * time.Minute),
-			},
-		},
-	}
-	spawner := &fakeSpawner{}
-	if err := New(singleResolver(&fakeTracker{issues: []domain.Issue{issue}}), store, spawner, Config{
-		Clock:           func() time.Time { return now },
-		ClaimStaleAfter: time.Minute,
-		Logger:          discardLogger(),
-	}).Poll(context.Background()); err != nil {
-		t.Fatal(err)
-	}
-	if len(spawner.calls) != 1 {
-		t.Fatalf("stale orphan recovery spawn calls = %d, want 1", len(spawner.calls))
-	}
-	run := store.workflowRuns[workflowRunKey("demo", issueID)]
-	if run.State != domain.WorkflowRunRunning || run.SessionID == "" {
-		t.Fatalf("recovered workflow run = %+v", run)
-	}
-}
-
-func TestPollWorkflowReconciliationReleasesTerminalAndIneligibleIssues(t *testing.T) {
-	tests := []struct {
-		name       string
-		issue      domain.Issue
-		wantReason string
-	}{
-		{
-			name:       "terminal",
-			issue:      domain.Issue{ID: domain.TrackerID{Provider: domain.TrackerProviderGitHub, Native: "acme/demo#1"}, State: domain.IssueDone, Labels: []string{"symphony"}, Assignees: []string{"alice"}},
-			wantReason: "terminal:done",
-		},
-		{
-			name:       "ineligible missing label",
-			issue:      domain.Issue{ID: domain.TrackerID{Provider: domain.TrackerProviderGitHub, Native: "acme/demo#1"}, State: domain.IssueOpen, Assignees: []string{"alice"}},
-			wantReason: "ineligible:open",
-		},
-	}
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			projectPath := t.TempDir()
-			writeIntakeWorkflow(t, projectPath, `---
-tracker:
-  kind: github
-  provider:
-    assignee: alice
-  required_labels: [symphony]
-  active_states: [open]
-  terminal_states: [done, cancelled]
----
-{{ issue.identifier }}
-`)
-			issueID := CanonicalIssueID(test.issue.ID)
-			store := &fakeStore{
-				projects: []domain.ProjectRecord{workflowProject("demo", projectPath)},
-				sessions: []domain.SessionRecord{{ID: "demo-1", ProjectID: "demo", IssueID: issueID}},
-				workflowRuns: map[string]domain.WorkflowRunRecord{
-					workflowRunKey("demo", issueID): {
-						ProjectID: "demo", IssueID: issueID, SessionID: "demo-1",
-						WorkflowRevision: "rev-1", State: domain.WorkflowRunRunning,
-					},
-				},
-			}
-			terminator := &fakeTerminator{}
-			if err := New(singleResolver(&fakeTracker{issues: []domain.Issue{test.issue}}), store, &fakeSpawner{}, Config{
-				Terminator: terminator,
-				Logger:     discardLogger(),
-			}).Poll(context.Background()); err != nil {
-				t.Fatal(err)
-			}
-			run := store.workflowRuns[workflowRunKey("demo", issueID)]
-			if run.State != domain.WorkflowRunReleased || run.TerminalReason != test.wantReason {
-				t.Fatalf("reconciled run = %+v", run)
-			}
-			if len(terminator.killed) != 1 || terminator.killed[0] != "demo-1" {
-				t.Fatalf("terminated sessions = %+v", terminator.killed)
-			}
-		})
-	}
-}
-
-func TestPollWorkflowReconciliationQueuesNormalAndAbnormalExit(t *testing.T) {
-	tests := []struct {
-		name       string
-		terminated bool
-		wantDelay  time.Duration
-		wantError  string
-	}{
-		{name: "normal continuation", wantDelay: time.Second},
-		{name: "abnormal exit", terminated: true, wantDelay: 10 * time.Second, wantError: "session terminated before issue became ineligible"},
-	}
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			projectPath := t.TempDir()
-			writeIntakeWorkflow(t, projectPath, `---
-tracker:
-  kind: github
-  provider:
-    assignee: alice
-  active_states: [open]
----
-{{ issue.identifier }}
-`)
-			now := time.Date(2026, 7, 26, 11, 0, 0, 0, time.UTC)
-			issue := workflowIssue("acme/demo#1")
-			issueID := CanonicalIssueID(issue.ID)
-			store := &fakeStore{
-				projects: []domain.ProjectRecord{workflowProject("demo", projectPath)},
-				sessions: []domain.SessionRecord{{
-					ID: "demo-1", ProjectID: "demo", IssueID: issueID,
-					Activity:     domain.Activity{State: domain.ActivityExited},
-					IsTerminated: test.terminated,
-				}},
-				workflowRuns: map[string]domain.WorkflowRunRecord{
-					workflowRunKey("demo", issueID): {
-						ProjectID: "demo", IssueID: issueID, SessionID: "demo-1",
-						WorkflowRevision: "rev-1", State: domain.WorkflowRunRunning,
-					},
-				},
-			}
-			terminator := &fakeTerminator{}
-			if err := New(singleResolver(&fakeTracker{issues: []domain.Issue{issue}}), store, &fakeSpawner{}, Config{
-				Clock:      func() time.Time { return now },
-				Terminator: terminator,
-				Logger:     discardLogger(),
-			}).Poll(context.Background()); err != nil {
-				t.Fatal(err)
-			}
-			run := store.workflowRuns[workflowRunKey("demo", issueID)]
-			if run.State != domain.WorkflowRunRetryQueued || run.Attempt != 1 ||
-				!run.RetryDueAt.Equal(now.Add(test.wantDelay)) || run.LastError != test.wantError {
-				t.Fatalf("queued retry = %+v", run)
-			}
-			if test.terminated && len(terminator.killed) != 0 {
-				t.Fatalf("already terminated session killed again: %+v", terminator.killed)
-			}
-			if !test.terminated && len(terminator.killed) != 1 {
-				t.Fatalf("normal exited session was not retired: %+v", terminator.killed)
-			}
-		})
-	}
-}
-
-func TestPollWorkflowDueRetryDispatchesByIDWhenListOmitsIssue(t *testing.T) {
-	projectPath := t.TempDir()
-	writeIntakeWorkflow(t, projectPath, `---
-tracker:
-  kind: github
-  provider:
-    assignee: alice
-  active_states: [open]
----
-Retry {{ issue.identifier }} attempt {{ attempt }}
-`)
-	now := time.Date(2026, 7, 26, 11, 0, 0, 0, time.UTC)
-	issue := workflowIssue("acme/demo#1")
-	issueID := CanonicalIssueID(issue.ID)
-	store := &fakeStore{
-		projects: []domain.ProjectRecord{workflowProject("demo", projectPath)},
-		workflowRuns: map[string]domain.WorkflowRunRecord{
-			workflowRunKey("demo", issueID): {
-				ProjectID: "demo", IssueID: issueID, WorkflowRevision: "rev-1",
-				State: domain.WorkflowRunRetryQueued, Attempt: 2,
-				RetryDueAt: now.Add(-time.Second), UpdatedAt: now.Add(-time.Second),
-			},
-		},
-	}
-	tracker := &fakeTracker{getIssue: &issue}
-	spawner := &fakeSpawner{}
-	if err := New(singleResolver(tracker), store, spawner, Config{
-		Clock:  func() time.Time { return now },
-		Logger: discardLogger(),
-	}).Poll(context.Background()); err != nil {
-		t.Fatal(err)
-	}
-	if len(spawner.calls) != 1 {
-		t.Fatalf("direct retry spawn calls = %+v, want one", spawner.calls)
-	}
-	if got := spawner.calls[0].Prompt; got != "Retry acme/demo#1 attempt 2" {
-		t.Fatalf("direct retry prompt = %q", got)
-	}
-	run := store.workflowRuns[workflowRunKey("demo", issueID)]
-	if run.State != domain.WorkflowRunRunning || run.Attempt != 2 {
-		t.Fatalf("direct retry run = %+v", run)
-	}
-}
-
-func TestPollWorkflowSpawnFailureQueuesDocumentedBackoff(t *testing.T) {
-	projectPath := t.TempDir()
-	writeIntakeWorkflow(t, projectPath, `---
-tracker:
-  kind: github
-  provider:
-    assignee: alice
-agent:
-  max_retry_backoff_ms: 15000
----
-{{ issue.identifier }}
-`)
-	now := time.Date(2026, 7, 26, 10, 0, 0, 0, time.UTC)
-	store := &fakeStore{projects: []domain.ProjectRecord{workflowProject("demo", projectPath)}}
-	issue := workflowIssue("acme/demo#1")
-	spawner := &fakeSpawner{failIssue: CanonicalIssueID(issue.ID)}
-	if err := New(singleResolver(&fakeTracker{issues: []domain.Issue{issue}}), store, spawner, Config{
-		Clock:  func() time.Time { return now },
-		Logger: discardLogger(),
-	}).Poll(context.Background()); err != nil {
-		t.Fatal(err)
-	}
-	run := store.workflowRuns[workflowRunKey("demo", CanonicalIssueID(issue.ID))]
-	if run.State != domain.WorkflowRunRetryQueued || run.Attempt != 1 ||
-		!run.RetryDueAt.Equal(now.Add(10*time.Second)) ||
-		run.LastError != "spawn failed" || run.WorkflowRevision == "" {
-		t.Fatalf("queued retry = %+v", run)
-	}
-}
-
-func TestPollSpawnsWorkerForEligibleIssue(t *testing.T) {
-	store := &fakeStore{
-		projects: []domain.ProjectRecord{{
-			ID:            "demo",
-			RepoOriginURL: "https://github.com/acme/demo.git",
-			Config: domain.ProjectConfig{TrackerIntake: domain.TrackerIntakeConfig{
-				Enabled:  true,
-				Assignee: "alice",
-			}},
-		}},
-	}
 	tracker := &fakeTracker{issues: []domain.Issue{{
 		ID:        domain.TrackerID{Provider: domain.TrackerProviderGitHub, Native: "acme/demo#12"},
 		Title:     "Fix login",
@@ -545,17 +39,11 @@ func TestPollSpawnsWorkerForEligibleIssue(t *testing.T) {
 		t.Fatalf("spawn calls = %d, want 1", len(spawner.calls))
 	}
 	call := spawner.calls[0]
-	if call.ProjectID != "demo" || call.Kind != domain.KindWorker {
+	if call.ProjectID != "demo" || call.Kind != domain.KindWorker || call.IssueID != "github:acme/demo#12" {
 		t.Fatalf("spawn config = %+v", call)
-	}
-	if call.IssueID != "github:acme/demo#12" {
-		t.Fatalf("IssueID = %q, want canonical github id", call.IssueID)
 	}
 	if !strings.Contains(call.Prompt, "Fix login") || !strings.Contains(call.Prompt, "The login form submits twice.") {
 		t.Fatalf("prompt missing issue context:\n%s", call.Prompt)
-	}
-	if len(tracker.filters) != 1 {
-		t.Fatalf("tracker filters = %d, want 1", len(tracker.filters))
 	}
 	if got := tracker.filters[0]; got.State != domain.ListOpen || got.Assignee != "alice" || len(got.Labels) != 0 {
 		t.Fatalf("tracker filter = %+v", got)
@@ -594,7 +82,9 @@ func TestPollRespawnsIssueAfterTerminatedSession(t *testing.T) {
 			RepoOriginURL: "https://github.com/acme/demo.git",
 			Config:        domain.ProjectConfig{TrackerIntake: domain.TrackerIntakeConfig{Enabled: true, Assignee: "alice"}},
 		}},
-		sessions: []domain.SessionRecord{{ID: "demo-1", ProjectID: "demo", IssueID: "github:acme/demo#12", IsTerminated: true}},
+		sessions: []domain.SessionRecord{{
+			ID: "demo-1", ProjectID: "demo", IssueID: "github:acme/demo#12", IsTerminated: true,
+		}},
 	}
 	tracker := &fakeTracker{issues: []domain.Issue{{
 		ID:        domain.TrackerID{Provider: domain.TrackerProviderGitHub, Native: "acme/demo#12"},
@@ -608,31 +98,21 @@ func TestPollRespawnsIssueAfterTerminatedSession(t *testing.T) {
 		t.Fatalf("Poll() error = %v", err)
 	}
 	if len(spawner.calls) != 1 || spawner.calls[0].IssueID != "github:acme/demo#12" {
-		t.Fatalf("spawn calls = %+v, want one spawn for issue #12 (terminated session should not block respawn)", spawner.calls)
+		t.Fatalf("spawn calls = %+v", spawner.calls)
 	}
 }
 
 func TestSeenIssueIDsExcludesTerminatedSessions(t *testing.T) {
 	sessions := []domain.SessionRecord{
 		{ID: "demo-1", IssueID: "github:acme/demo#12", IsTerminated: true},
-		{ID: "demo-2", IssueID: "github:acme/demo#12", IsTerminated: false},
+		{ID: "demo-2", IssueID: "github:acme/demo#12"},
 	}
 	seen := seenIssueIDs(sessions)
-	if !seen["github:acme/demo#12"] {
-		t.Fatal("issue with a live session alongside a terminated one should still be seen")
+	if !seen["github:acme/demo#12"] || len(seen) != 1 {
+		t.Fatalf("seen = %+v, want one live issue", seen)
 	}
-	if len(seen) != 1 {
-		t.Fatalf("seen = %+v, want exactly one issue", seen)
-	}
-}
-
-func TestSeenIssueIDsIgnoresOnlyTerminatedSession(t *testing.T) {
-	sessions := []domain.SessionRecord{
-		{ID: "demo-1", IssueID: "github:acme/demo#12", IsTerminated: true},
-	}
-	seen := seenIssueIDs(sessions)
-	if seen["github:acme/demo#12"] {
-		t.Fatal("issue with only a terminated session should not be marked as seen")
+	if seenIssueIDs(sessions[:1])["github:acme/demo#12"] {
+		t.Fatal("terminated-only issue should not be seen")
 	}
 }
 
@@ -641,35 +121,30 @@ func TestPollSkipsSessionScanWhenIntakeDisabled(t *testing.T) {
 		projects:    []domain.ProjectRecord{{ID: "demo"}},
 		sessionsErr: errors.New("session scan should not run"),
 	}
-
 	if err := New(singleResolver(&fakeTracker{}), store, &fakeSpawner{}, Config{Logger: discardLogger()}).Poll(context.Background()); err != nil {
 		t.Fatalf("Poll() error = %v, want nil", err)
 	}
 }
 
 func TestPollSkipsIneligibleAndInvalidProjects(t *testing.T) {
-	store := &fakeStore{
-		projects: []domain.ProjectRecord{
-			{ID: "off", RepoOriginURL: "https://github.com/acme/off.git"},
-			{ID: "broad", RepoOriginURL: "https://github.com/acme/broad.git", Config: domain.ProjectConfig{TrackerIntake: domain.TrackerIntakeConfig{Enabled: true}}},
-			{ID: "missing-origin", Config: domain.ProjectConfig{TrackerIntake: domain.TrackerIntakeConfig{Enabled: true, Assignee: "alice"}}},
-		},
-	}
+	store := &fakeStore{projects: []domain.ProjectRecord{
+		{ID: "off", RepoOriginURL: "https://github.com/acme/off.git"},
+		{ID: "broad", RepoOriginURL: "https://github.com/acme/broad.git", Config: domain.ProjectConfig{TrackerIntake: domain.TrackerIntakeConfig{Enabled: true}}},
+		{ID: "missing-origin", Config: domain.ProjectConfig{TrackerIntake: domain.TrackerIntakeConfig{Enabled: true, Assignee: "alice"}}},
+		{ID: "linear-missing-project", Config: domain.ProjectConfig{TrackerIntake: domain.TrackerIntakeConfig{
+			Enabled: true, Provider: domain.TrackerProviderLinear, Assignee: "alice",
+		}}},
+	}}
 	tracker := &fakeTracker{issues: []domain.Issue{{
-		ID:    domain.TrackerID{Provider: domain.TrackerProviderGitHub, Native: "acme/off#1"},
-		Title: "ignored",
-		State: domain.IssueOpen,
+		ID: domain.TrackerID{Provider: domain.TrackerProviderGitHub, Native: "acme/off#1"}, State: domain.IssueOpen,
 	}}}
 	spawner := &fakeSpawner{}
 
 	if err := New(singleResolver(tracker), store, spawner, Config{Logger: discardLogger()}).Poll(context.Background()); err != nil {
 		t.Fatalf("Poll() error = %v", err)
 	}
-	if len(tracker.repos) != 0 {
-		t.Fatalf("tracker was called for invalid/off projects: %+v", tracker.repos)
-	}
-	if len(spawner.calls) != 0 {
-		t.Fatalf("spawn calls = %d, want 0", len(spawner.calls))
+	if len(tracker.repos) != 0 || len(spawner.calls) != 0 {
+		t.Fatalf("unexpected tracker calls=%+v spawn calls=%+v", tracker.repos, spawner.calls)
 	}
 }
 
@@ -680,57 +155,44 @@ func TestPollContinuesAfterTrackerAndSpawnFailures(t *testing.T) {
 	}}
 	tracker := &fakeTracker{
 		failRepos: map[string]error{"acme/bad": errors.New("rate limited")},
-		issuesByRepo: map[string][]domain.Issue{
-			"acme/good": {
-				{ID: domain.TrackerID{Provider: domain.TrackerProviderGitHub, Native: "acme/good#1"}, Title: "first", State: domain.IssueOpen, Assignees: []string{"alice"}},
-				{ID: domain.TrackerID{Provider: domain.TrackerProviderGitHub, Native: "acme/good#2"}, Title: "second", State: domain.IssueOpen, Assignees: []string{"alice"}},
-			},
-		},
+		issuesByRepo: map[string][]domain.Issue{"acme/good": {
+			{ID: domain.TrackerID{Provider: domain.TrackerProviderGitHub, Native: "acme/good#1"}, State: domain.IssueOpen, Assignees: []string{"alice"}},
+			{ID: domain.TrackerID{Provider: domain.TrackerProviderGitHub, Native: "acme/good#2"}, State: domain.IssueOpen, Assignees: []string{"alice"}},
+		}},
 	}
-	spawner := &fakeSpawner{failIssue: domain.IssueID("github:acme/good#1")}
+	spawner := &fakeSpawner{failIssue: "github:acme/good#1"}
 
 	if err := New(singleResolver(tracker), store, spawner, Config{Logger: discardLogger()}).Poll(context.Background()); err != nil {
 		t.Fatalf("Poll() error = %v", err)
 	}
-	if len(spawner.calls) != 2 {
-		t.Fatalf("spawn attempts = %d, want 2", len(spawner.calls))
-	}
-	if spawner.calls[1].IssueID != "github:acme/good#2" {
-		t.Fatalf("second spawn issue = %q", spawner.calls[1].IssueID)
+	if len(spawner.calls) != 2 || spawner.calls[1].IssueID != "github:acme/good#2" {
+		t.Fatalf("spawn calls = %+v", spawner.calls)
 	}
 }
 
 func TestPollBacksOffProjectAfterFailure(t *testing.T) {
 	now := time.Date(2026, 6, 27, 10, 0, 0, 0, time.UTC)
 	store := &fakeStore{projects: []domain.ProjectRecord{{
-		ID:            "demo",
-		RepoOriginURL: "https://github.com/acme/demo.git",
-		Config:        domain.ProjectConfig{TrackerIntake: domain.TrackerIntakeConfig{Enabled: true, Assignee: "alice"}},
+		ID: "demo", RepoOriginURL: "https://github.com/acme/demo.git",
+		Config: domain.ProjectConfig{TrackerIntake: domain.TrackerIntakeConfig{Enabled: true, Assignee: "alice"}},
 	}}}
 	tracker := &fakeTracker{failRepos: map[string]error{"acme/demo": errors.New("rate limited")}}
 	observer := New(singleResolver(tracker), store, &fakeSpawner{}, Config{
-		Clock:          func() time.Time { return now },
-		FailureBackoff: time.Minute,
-		Logger:         discardLogger(),
+		Clock: func() time.Time { return now }, FailureBackoff: time.Minute, Logger: discardLogger(),
 	})
 
 	if err := observer.Poll(context.Background()); err != nil {
-		t.Fatalf("first Poll() error = %v", err)
+		t.Fatal(err)
 	}
-	if len(tracker.repos) != 1 {
-		t.Fatalf("tracker calls after first poll = %d, want 1", len(tracker.repos))
-	}
-
 	if err := observer.Poll(context.Background()); err != nil {
-		t.Fatalf("second Poll() error = %v", err)
+		t.Fatal(err)
 	}
 	if len(tracker.repos) != 1 {
-		t.Fatalf("tracker calls during backoff = %d, want still 1", len(tracker.repos))
+		t.Fatalf("tracker calls during backoff = %d, want 1", len(tracker.repos))
 	}
-
 	now = now.Add(time.Minute + time.Nanosecond)
 	if err := observer.Poll(context.Background()); err != nil {
-		t.Fatalf("third Poll() error = %v", err)
+		t.Fatal(err)
 	}
 	if len(tracker.repos) != 2 {
 		t.Fatalf("tracker calls after backoff = %d, want 2", len(tracker.repos))
@@ -739,142 +201,110 @@ func TestPollBacksOffProjectAfterFailure(t *testing.T) {
 
 func TestPollSkipsNonOpenIssueStates(t *testing.T) {
 	store := &fakeStore{projects: []domain.ProjectRecord{{
-		ID:            "demo",
-		RepoOriginURL: "https://github.com/acme/demo.git",
-		Config:        domain.ProjectConfig{TrackerIntake: domain.TrackerIntakeConfig{Enabled: true, Assignee: "alice"}},
+		ID: "demo", RepoOriginURL: "https://github.com/acme/demo.git",
+		Config: domain.ProjectConfig{TrackerIntake: domain.TrackerIntakeConfig{Enabled: true, Assignee: "alice"}},
 	}}}
 	tracker := &fakeTracker{issues: []domain.Issue{
-		{ID: domain.TrackerID{Provider: domain.TrackerProviderGitHub, Native: "acme/demo#1"}, Title: "already active", State: domain.IssueInProgress, Assignees: []string{"alice"}},
-		{ID: domain.TrackerID{Provider: domain.TrackerProviderGitHub, Native: "acme/demo#2"}, Title: "ready", State: domain.IssueOpen, Assignees: []string{"alice"}},
+		{ID: domain.TrackerID{Provider: domain.TrackerProviderGitHub, Native: "acme/demo#1"}, State: domain.IssueInProgress, Assignees: []string{"alice"}},
+		{ID: domain.TrackerID{Provider: domain.TrackerProviderGitHub, Native: "acme/demo#2"}, State: domain.IssueOpen, Assignees: []string{"alice"}},
 	}}
 	spawner := &fakeSpawner{}
-
 	if err := New(singleResolver(tracker), store, spawner, Config{Logger: discardLogger()}).Poll(context.Background()); err != nil {
-		t.Fatalf("Poll() error = %v", err)
+		t.Fatal(err)
 	}
 	if len(spawner.calls) != 1 || spawner.calls[0].IssueID != "github:acme/demo#2" {
-		t.Fatalf("spawn calls = %+v, want only open issue #2", spawner.calls)
+		t.Fatalf("spawn calls = %+v", spawner.calls)
 	}
 }
 
 func TestPollAppliesLocalEligibilityFilter(t *testing.T) {
 	store := &fakeStore{projects: []domain.ProjectRecord{{
-		ID:            "demo",
-		RepoOriginURL: "https://github.com/acme/demo.git",
-		Config:        domain.ProjectConfig{TrackerIntake: domain.TrackerIntakeConfig{Enabled: true, Assignee: "alice"}},
+		ID: "demo", RepoOriginURL: "https://github.com/acme/demo.git",
+		Config: domain.ProjectConfig{TrackerIntake: domain.TrackerIntakeConfig{Enabled: true, Assignee: "alice"}},
 	}}}
 	tracker := &fakeTracker{issues: []domain.Issue{
-		{ID: domain.TrackerID{Provider: domain.TrackerProviderGitHub, Native: "acme/demo#1"}, Title: "unassigned", State: domain.IssueOpen},
-		{ID: domain.TrackerID{Provider: domain.TrackerProviderGitHub, Native: "acme/demo#2"}, Title: "wrong assignee", State: domain.IssueOpen, Assignees: []string{"bob"}},
-		{ID: domain.TrackerID{Provider: domain.TrackerProviderGitHub, Native: "acme/demo#3"}, Title: "eligible", State: domain.IssueOpen, Labels: []string{"Agent-Ready"}, Assignees: []string{"Alice"}},
+		{ID: domain.TrackerID{Provider: domain.TrackerProviderGitHub, Native: "acme/demo#1"}, State: domain.IssueOpen},
+		{ID: domain.TrackerID{Provider: domain.TrackerProviderGitHub, Native: "acme/demo#2"}, State: domain.IssueOpen, Assignees: []string{"bob"}},
+		{ID: domain.TrackerID{Provider: domain.TrackerProviderGitHub, Native: "acme/demo#3"}, State: domain.IssueOpen, Assignees: []string{"Alice"}},
 	}}
 	spawner := &fakeSpawner{}
-
 	if err := New(singleResolver(tracker), store, spawner, Config{Logger: discardLogger()}).Poll(context.Background()); err != nil {
-		t.Fatalf("Poll() error = %v", err)
+		t.Fatal(err)
 	}
 	if len(spawner.calls) != 1 || spawner.calls[0].IssueID != "github:acme/demo#3" {
-		t.Fatalf("spawn calls = %+v, want only eligible issue #3", spawner.calls)
+		t.Fatalf("spawn calls = %+v", spawner.calls)
 	}
 }
 
 func TestIssueMatchesConfigAssigneeSpecialValues(t *testing.T) {
 	assigned := domain.Issue{Assignees: []string{"alice"}}
 	unassigned := domain.Issue{}
-	if !issueMatchesConfig(assigned, domain.TrackerIntakeConfig{Assignee: "*"}) {
-		t.Fatal("assigned issue should match assignee=*")
-	}
-	if issueMatchesConfig(unassigned, domain.TrackerIntakeConfig{Assignee: "*"}) {
-		t.Fatal("unassigned issue should not match assignee=*")
-	}
-	if !issueMatchesConfig(unassigned, domain.TrackerIntakeConfig{Assignee: "none"}) {
-		t.Fatal("unassigned issue should match assignee=none")
-	}
-	if issueMatchesConfig(assigned, domain.TrackerIntakeConfig{Assignee: "none"}) {
-		t.Fatal("assigned issue should not match assignee=none")
+	if !issueMatchesConfig(assigned, domain.TrackerIntakeConfig{Assignee: "*"}) ||
+		issueMatchesConfig(unassigned, domain.TrackerIntakeConfig{Assignee: "*"}) ||
+		!issueMatchesConfig(unassigned, domain.TrackerIntakeConfig{Assignee: "none"}) ||
+		issueMatchesConfig(assigned, domain.TrackerIntakeConfig{Assignee: "none"}) {
+		t.Fatal("assignee special-value matching failed")
 	}
 }
 
 func TestBuildIssuePromptCapsLargeIssueBody(t *testing.T) {
 	prompt := BuildIssuePrompt(domain.Issue{
-		ID:    domain.TrackerID{Provider: domain.TrackerProviderGitHub, Native: "acme/demo#99"},
-		Title: "Large issue",
-		URL:   "https://github.com/acme/demo/issues/99",
-		Body:  strings.Repeat("body ", 2000),
+		ID:         domain.TrackerID{Provider: domain.TrackerProviderLinear, Native: "issue-uuid"},
+		Identifier: "FUQ-12",
+		Title:      "Large issue",
+		URL:        "https://linear.app/example/issue/FUQ-12",
+		Body:       strings.Repeat("body ", 2000),
 	})
-	if len(prompt) > maxIntakePromptLen {
-		t.Fatalf("prompt length = %d, want <= %d", len(prompt), maxIntakePromptLen)
-	}
-	if !strings.Contains(prompt, "Issue content truncated") {
-		t.Fatalf("prompt missing truncation notice:\n%s", prompt)
-	}
-	if !strings.Contains(prompt, "https://github.com/acme/demo/issues/99") {
-		t.Fatalf("prompt missing issue URL:\n%s", prompt)
-	}
-	if !strings.HasSuffix(prompt, intakePromptFooter) {
-		t.Fatalf("prompt missing footer:\n%s", prompt)
+	if len(prompt) > maxIntakePromptLen || !strings.Contains(prompt, "Issue content truncated") ||
+		!strings.Contains(prompt, "Identifier: FUQ-12") || !strings.HasSuffix(prompt, intakePromptFooter) {
+		t.Fatalf("unexpected prompt:\n%s", prompt)
 	}
 }
 
-func TestTrackerRepoUsesConfiguredRepo(t *testing.T) {
-	project := domain.ProjectRecord{
-		ID:            "demo",
+func TestTrackerRepoUsesConfiguredScopes(t *testing.T) {
+	github, ok := trackerRepo(domain.ProjectRecord{
 		RepoOriginURL: "https://github.com/wrong/repo.git",
+	}, domain.TrackerIntakeConfig{Enabled: true, Repo: "acme/demo", Assignee: "alice"}.WithDefaults())
+	if !ok || github != (domain.TrackerRepo{Provider: domain.TrackerProviderGitHub, Native: "acme/demo"}) {
+		t.Fatalf("github scope = %+v, ok=%v", github, ok)
+	}
+	linear, ok := trackerRepo(domain.ProjectRecord{}, domain.TrackerIntakeConfig{
+		Enabled: true, Provider: domain.TrackerProviderLinear, Repo: "project-uuid", Assignee: "alice",
+	}.WithDefaults())
+	if !ok || linear != (domain.TrackerRepo{Provider: domain.TrackerProviderLinear, Native: "project-uuid"}) {
+		t.Fatalf("linear scope = %+v, ok=%v", linear, ok)
+	}
+}
+
+func TestPollRoutesLinearProjectWithoutWorkflowState(t *testing.T) {
+	project := domain.ProjectRecord{
+		ID: "linear-demo",
 		Config: domain.ProjectConfig{TrackerIntake: domain.TrackerIntakeConfig{
-			Enabled:  true,
-			Repo:     "acme/demo",
-			Assignee: "alice",
+			Enabled: true, Provider: domain.TrackerProviderLinear, Repo: "project-uuid", Assignee: "alice@example.com",
 		}},
 	}
-	repo, ok := trackerRepo(project, project.Config.TrackerIntake.WithDefaults())
-	if !ok {
-		t.Fatal("trackerRepo ok = false")
-	}
-	if repo.Native != "acme/demo" {
-		t.Fatalf("repo.Native = %q, want acme/demo", repo.Native)
-	}
-}
-
-func TestPollWorkflowRoutesLinearProjectAndRendersIdentifier(t *testing.T) {
-	projectPath := t.TempDir()
-	writeIntakeWorkflow(t, projectPath, `---
-tracker:
-  kind: linear
-  provider:
-    project: project-uuid
-  required_labels: [agent]
----
-Implement {{ issue.identifier }}: {{ issue.title }}
-`)
-	project := workflowProject("linear-demo", projectPath)
 	tracker := &fakeTracker{issues: []domain.Issue{{
 		ID:         domain.TrackerID{Provider: domain.TrackerProviderLinear, Native: "issue-uuid"},
 		Identifier: "FUQ-12",
 		Title:      "Ship the service",
 		State:      domain.IssueOpen,
-		Labels:     []string{"agent"},
+		Assignees:  []string{"alice@example.com"},
 	}}}
 	store := &fakeStore{projects: []domain.ProjectRecord{project}}
 	spawner := &fakeSpawner{}
-	observer := New(MultiTrackerResolver{
-		domain.TrackerProviderLinear: tracker,
-	}, store, spawner, Config{Logger: discardLogger()})
+	observer := New(MultiTrackerResolver{domain.TrackerProviderLinear: tracker}, store, spawner, Config{Logger: discardLogger()})
 
 	if err := observer.Poll(context.Background()); err != nil {
 		t.Fatal(err)
 	}
 	if len(tracker.repos) != 1 || tracker.repos[0] != (domain.TrackerRepo{
-		Provider: domain.TrackerProviderLinear,
-		Native:   "project-uuid",
+		Provider: domain.TrackerProviderLinear, Native: "project-uuid",
 	}) {
 		t.Fatalf("repos = %#v", tracker.repos)
 	}
-	if len(spawner.calls) != 1 {
+	if len(spawner.calls) != 1 || spawner.calls[0].IssueID != "linear:issue-uuid" ||
+		!strings.Contains(spawner.calls[0].Prompt, "Identifier: FUQ-12") {
 		t.Fatalf("spawn calls = %#v", spawner.calls)
-	}
-	call := spawner.calls[0]
-	if call.IssueID != "linear:issue-uuid" || call.Prompt != "Implement FUQ-12: Ship the service" {
-		t.Fatalf("spawn call = %#v", call)
 	}
 }
 
@@ -883,10 +313,9 @@ func singleResolver(tracker ports.Tracker) TrackerResolver {
 }
 
 type fakeStore struct {
-	projects     []domain.ProjectRecord
-	sessions     []domain.SessionRecord
-	sessionsErr  error
-	workflowRuns map[string]domain.WorkflowRunRecord
+	projects    []domain.ProjectRecord
+	sessions    []domain.SessionRecord
+	sessionsErr error
 }
 
 func (f *fakeStore) ListProjects(context.Context) ([]domain.ProjectRecord, error) {
@@ -897,103 +326,8 @@ func (f *fakeStore) ListAllSessions(context.Context) ([]domain.SessionRecord, er
 	return append([]domain.SessionRecord(nil), f.sessions...), f.sessionsErr
 }
 
-func (f *fakeStore) TryClaimWorkflowIssue(_ context.Context, rec domain.WorkflowRunRecord) (bool, error) {
-	if f.workflowRuns == nil {
-		f.workflowRuns = make(map[string]domain.WorkflowRunRecord)
-	}
-	key := workflowRunKey(rec.ProjectID, rec.IssueID)
-	existing, ok := f.workflowRuns[key]
-	if ok && existing.State != domain.WorkflowRunReleased {
-		return false, nil
-	}
-	rec.State = domain.WorkflowRunClaimed
-	f.workflowRuns[key] = rec
-	return true, nil
-}
-
-func (f *fakeStore) TryClaimDueWorkflowRetry(_ context.Context, rec domain.WorkflowRunRecord, dueAt time.Time) (bool, error) {
-	if f.workflowRuns == nil {
-		return false, nil
-	}
-	key := workflowRunKey(rec.ProjectID, rec.IssueID)
-	existing, ok := f.workflowRuns[key]
-	if !ok || existing.State != domain.WorkflowRunRetryQueued || existing.RetryDueAt.After(dueAt) {
-		return false, nil
-	}
-	existing.IssueIdentifier = rec.IssueIdentifier
-	existing.SessionID = ""
-	existing.WorkflowRevision = rec.WorkflowRevision
-	existing.State = domain.WorkflowRunClaimed
-	existing.Attempt = rec.Attempt
-	existing.RetryDueAt = time.Time{}
-	existing.LastError = ""
-	existing.TerminalReason = ""
-	existing.UpdatedAt = rec.UpdatedAt
-	f.workflowRuns[key] = existing
-	return true, nil
-}
-
-func (f *fakeStore) BindWorkflowIssueSession(_ context.Context, projectID domain.ProjectID, issueID domain.IssueID, sessionID domain.SessionID, updatedAt time.Time) (bool, error) {
-	key := workflowRunKey(projectID, issueID)
-	rec, ok := f.workflowRuns[key]
-	if !ok || rec.State != domain.WorkflowRunClaimed {
-		return false, nil
-	}
-	rec.SessionID = sessionID
-	rec.State = domain.WorkflowRunRunning
-	rec.UpdatedAt = updatedAt
-	f.workflowRuns[key] = rec
-	return true, nil
-}
-
-func (f *fakeStore) QueueWorkflowRetry(_ context.Context, rec domain.WorkflowRunRecord) (bool, error) {
-	key := workflowRunKey(rec.ProjectID, rec.IssueID)
-	existing, ok := f.workflowRuns[key]
-	if !ok || existing.State == domain.WorkflowRunReleased {
-		return false, nil
-	}
-	existing.State = domain.WorkflowRunRetryQueued
-	existing.WorkflowRevision = rec.WorkflowRevision
-	existing.Attempt = rec.Attempt
-	existing.RetryDueAt = rec.RetryDueAt
-	existing.LastError = rec.LastError
-	existing.TerminalReason = ""
-	existing.UpdatedAt = rec.UpdatedAt
-	f.workflowRuns[key] = existing
-	return true, nil
-}
-
-func (f *fakeStore) ReleaseWorkflowIssue(_ context.Context, projectID domain.ProjectID, issueID domain.IssueID, reason string, updatedAt time.Time) (bool, error) {
-	key := workflowRunKey(projectID, issueID)
-	rec, ok := f.workflowRuns[key]
-	if !ok || rec.State == domain.WorkflowRunReleased {
-		return false, nil
-	}
-	rec.State = domain.WorkflowRunReleased
-	rec.TerminalReason = reason
-	rec.RetryDueAt = time.Time{}
-	rec.UpdatedAt = updatedAt
-	f.workflowRuns[key] = rec
-	return true, nil
-}
-
-func (f *fakeStore) ListActiveWorkflowRuns(context.Context) ([]domain.WorkflowRunRecord, error) {
-	var runs []domain.WorkflowRunRecord
-	for _, rec := range f.workflowRuns {
-		if rec.State != domain.WorkflowRunReleased {
-			runs = append(runs, rec)
-		}
-	}
-	return runs, nil
-}
-
-func workflowRunKey(projectID domain.ProjectID, issueID domain.IssueID) string {
-	return string(projectID) + "\x00" + string(issueID)
-}
-
 type fakeTracker struct {
 	issues       []domain.Issue
-	getIssue     *domain.Issue
 	issuesByRepo map[string][]domain.Issue
 	failRepos    map[string]error
 	repos        []domain.TrackerRepo
@@ -1001,9 +335,6 @@ type fakeTracker struct {
 }
 
 func (f *fakeTracker) Get(_ context.Context, id domain.TrackerID) (domain.Issue, error) {
-	if f.getIssue != nil && f.getIssue.ID == id {
-		return *f.getIssue, nil
-	}
 	for _, issue := range f.issues {
 		if issue.ID == id {
 			return issue, nil
@@ -1033,33 +364,9 @@ func (f *fakeTracker) List(_ context.Context, repo domain.TrackerRepo, filter do
 
 func (f *fakeTracker) Preflight(context.Context) error { return nil }
 
-type pollSignalTracker struct {
-	calls chan struct{}
-}
-
-func (p *pollSignalTracker) Get(context.Context, domain.TrackerID) (domain.Issue, error) {
-	return domain.Issue{}, errors.New("issue not found")
-}
-
-func (p *pollSignalTracker) List(context.Context, domain.TrackerRepo, domain.ListFilter) ([]domain.Issue, error) {
-	p.calls <- struct{}{}
-	return nil, nil
-}
-
-func (p *pollSignalTracker) Preflight(context.Context) error { return nil }
-
 type fakeSpawner struct {
 	calls     []ports.SpawnConfig
 	failIssue domain.IssueID
-}
-
-type fakeTerminator struct {
-	killed []domain.SessionID
-}
-
-func (f *fakeTerminator) Kill(_ context.Context, id domain.SessionID) (bool, error) {
-	f.killed = append(f.killed, id)
-	return true, nil
 }
 
 func (f *fakeSpawner) Spawn(_ context.Context, cfg ports.SpawnConfig) (domain.Session, int, int, error) {
@@ -1067,49 +374,13 @@ func (f *fakeSpawner) Spawn(_ context.Context, cfg ports.SpawnConfig) (domain.Se
 	if cfg.IssueID == f.failIssue {
 		return domain.Session{}, 0, 0, errors.New("spawn failed")
 	}
-	return domain.Session{SessionRecord: domain.SessionRecord{ID: domain.SessionID(string(cfg.ProjectID) + "-1"), ProjectID: cfg.ProjectID, IssueID: cfg.IssueID, Kind: cfg.Kind}}, len(cfg.Prompt), 0, nil
+	return domain.Session{
+		SessionRecord: domain.SessionRecord{
+			ID: domain.SessionID(string(cfg.ProjectID) + "-1"), ProjectID: cfg.ProjectID, IssueID: cfg.IssueID, Kind: cfg.Kind,
+		},
+	}, len(cfg.Prompt), 0, nil
 }
 
 func discardLogger() *slog.Logger {
 	return slog.New(slog.NewTextHandler(io.Discard, nil))
-}
-
-func writeIntakeWorkflow(t *testing.T, projectPath, content string) {
-	t.Helper()
-	if err := os.WriteFile(filepath.Join(projectPath, "WORKFLOW.md"), []byte(content), 0o600); err != nil {
-		t.Fatal(err)
-	}
-}
-
-func workflowProject(id, path string) domain.ProjectRecord {
-	return domain.ProjectRecord{
-		ID:            id,
-		Path:          path,
-		RepoOriginURL: "https://github.com/acme/" + id + ".git",
-		Config: domain.ProjectConfig{TrackerIntake: domain.TrackerIntakeConfig{
-			Enabled:      true,
-			WorkflowPath: "WORKFLOW.md",
-		}},
-	}
-}
-
-func workflowIssue(native string) domain.Issue {
-	return domain.Issue{
-		ID:        domain.TrackerID{Provider: domain.TrackerProviderGitHub, Native: native},
-		Title:     native,
-		State:     domain.IssueOpen,
-		Assignees: []string{"alice"},
-	}
-}
-
-func equalStrings(left, right []string) bool {
-	if len(left) != len(right) {
-		return false
-	}
-	for i := range left {
-		if left[i] != right[i] {
-			return false
-		}
-	}
-	return true
 }

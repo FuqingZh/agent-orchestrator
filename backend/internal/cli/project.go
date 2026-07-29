@@ -87,11 +87,10 @@ type roleOverride struct {
 
 // trackerIntakeConfig mirrors domain.TrackerIntakeConfig.
 type trackerIntakeConfig struct {
-	Enabled      bool   `json:"enabled,omitempty"`
-	Provider     string `json:"provider,omitempty"`
-	Repo         string `json:"repo,omitempty"`
-	Assignee     string `json:"assignee,omitempty"`
-	WorkflowPath string `json:"workflowPath,omitempty"`
+	Enabled  bool   `json:"enabled,omitempty"`
+	Provider string `json:"provider,omitempty"`
+	Repo     string `json:"repo,omitempty"`
+	Assignee string `json:"assignee,omitempty"`
 }
 
 // botReviewFeedbackConfig mirrors domain.BotReviewFeedbackConfig.
@@ -142,7 +141,6 @@ type projectSetConfigOptions struct {
 	trackerProvider   string
 	trackerRepo       string
 	trackerAssignee   string
-	trackerWorkflow   string
 	configJSON        string
 	clear             bool
 	json              bool
@@ -335,7 +333,6 @@ func newProjectSetConfigCommand(ctx *commandContext) *cobra.Command {
 	f.StringVar(&opts.trackerProvider, "tracker-provider", "", "Tracker provider: github or linear (default: github)")
 	f.StringVar(&opts.trackerRepo, "tracker-repo", "", "Provider scope: GitHub owner/repo or Linear project UUID")
 	f.StringVar(&opts.trackerAssignee, "tracker-assignee", "", "Provider assignee ID, login, email, or name required for intake eligibility")
-	f.StringVar(&opts.trackerWorkflow, "tracker-workflow", "", "Repo-relative Symphony WORKFLOW.md path for issue intake")
 	f.StringVar(&opts.configJSON, "config-json", "", "Full config as a JSON object (overrides field flags)")
 	f.BoolVar(&opts.clear, "clear", false, "Clear all config")
 	f.BoolVar(&opts.json, "json", false, "Output the updated project as JSON")
@@ -375,11 +372,10 @@ func buildProjectConfig(opts projectSetConfigOptions) (projectConfig, error) {
 		Worker:            roleOverride{Agent: opts.workerAgent},
 		Orchestrator:      roleOverride{Agent: opts.orchestratorAgent},
 		TrackerIntake: trackerIntakeConfig{
-			Enabled:      opts.trackerIntake,
-			Provider:     trackerProviderForFlags(opts),
-			Repo:         opts.trackerRepo,
-			Assignee:     opts.trackerAssignee,
-			WorkflowPath: opts.trackerWorkflow,
+			Enabled:  opts.trackerIntake,
+			Provider: trackerProviderForFlags(opts),
+			Repo:     opts.trackerRepo,
+			Assignee: opts.trackerAssignee,
 		},
 	}
 	if reflect.DeepEqual(cfg, projectConfig{}) {
@@ -392,7 +388,7 @@ func trackerProviderForFlags(opts projectSetConfigOptions) string {
 	if provider := strings.ToLower(strings.TrimSpace(opts.trackerProvider)); provider != "" {
 		return provider
 	}
-	if opts.trackerIntake || opts.trackerRepo != "" || opts.trackerAssignee != "" || opts.trackerWorkflow != "" {
+	if opts.trackerIntake || opts.trackerRepo != "" || opts.trackerAssignee != "" {
 		return "github"
 	}
 	return ""

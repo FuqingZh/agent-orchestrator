@@ -1415,7 +1415,6 @@ export interface components {
             /** @enum {string} */
             provider?: "github" | "linear";
             repo?: string;
-            workflowPath?: string;
         };
         TriggerReviewResponse: {
             /** @description True when a new review pass was started; false when an existing run for the same commit was reused. */

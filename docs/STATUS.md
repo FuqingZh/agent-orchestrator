@@ -51,6 +51,10 @@ surface (`npm run sqlc`, `npm run api`).
   ([#75](https://github.com/aoagents/agent-orchestrator/issues/75),
   [#108](https://github.com/aoagents/agent-orchestrator/issues/108),
   [#109](https://github.com/aoagents/agent-orchestrator/issues/109)).
+- Opt-in tracker intake observer with GitHub and read-only Linear adapters.
+  Intake is explicitly scoped by provider, repository/project, and assignee;
+  session issue IDs provide live-session deduplication without a second
+  workflow scheduler.
 - Terminal mux over WebSocket (`/mux`): per-client `tmux attach` PTY on
   Darwin/Linux; conpty loopback pty-host on Windows.
 - Lifecycle reducer plus reaper (`internal/observe/reaper`).
@@ -85,9 +89,9 @@ surface (`npm run sqlc`, `npm run api`).
 
 ## In flight / not yet a runtime feature
 
-- **Tracker lane**: GitHub tracker adapter exists, but there is no daemon
-  observer loop or agent-lifecycle→issue mirroring yet, so the tracker does
-  nothing at runtime ([#112](https://github.com/aoagents/agent-orchestrator/issues/112)).
+- **Tracker write-back**: issue intake runs at the daemon, but AO does not
+  transition or comment on GitHub/Linear issues. Product progress updates stay
+  with the tracker owner.
 - **Full raw PR/tracker fact surfacing**: the SCM observer writes facts and the
   desktop consumes concise PR summaries, but exposing the full raw `pr_*` /
   `tracker_*` CDC events to live consumers

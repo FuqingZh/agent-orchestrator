@@ -285,8 +285,17 @@ func TestSupervisorProcessHelper(t *testing.T) {
 // ensures process-tree probes observe processes created in this test's scope.
 func isolateTestServer(t *testing.T) {
 	t.Helper()
+	socketRoot, err := os.MkdirTemp("/tmp", "ao-tmux-")
+	if err != nil {
+		t.Fatalf("create tmux socket root: %v", err)
+	}
+	t.Cleanup(func() {
+		if err := os.RemoveAll(socketRoot); err != nil {
+			t.Errorf("remove tmux socket root: %v", err)
+		}
+	})
 	t.Setenv("TMUX", "")
-	t.Setenv("TMUX_TMPDIR", t.TempDir())
+	t.Setenv("TMUX_TMPDIR", socketRoot)
 }
 
 // waitForOutput polls GetOutput until out contains want or the deadline passes.

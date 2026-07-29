@@ -39,11 +39,6 @@ func startTrackerIntakeObserver(
 	spawner trackerintake.Spawner,
 	cfg trackerintake.Config,
 ) <-chan struct{} {
-	if cfg.Terminator == nil {
-		if terminator, ok := spawner.(trackerintake.Terminator); ok {
-			cfg.Terminator = terminator
-		}
-	}
 	observer := trackerintake.New(resolver, store, spawner, cfg)
 	return observer.Start(ctx)
 }
