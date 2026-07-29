@@ -187,6 +187,7 @@ type Session struct {
 	RuntimeLaunchID    string
 	WorkspaceRepoPath  string
 	TerminateOnPRMerge bool
+	LaunchPermissions  domain.PermissionMode
 }
 
 type SessionCleanupFact struct {

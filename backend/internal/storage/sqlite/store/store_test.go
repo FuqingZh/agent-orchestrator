@@ -413,6 +413,38 @@ func TestSessionRuntimeLaunchIDRoundTrip(t *testing.T) {
 	}
 }
 
+func TestSessionLaunchPermissionsRoundTrip(t *testing.T) {
+	s := newTestStore(t)
+	ctx := context.Background()
+	seedProject(t, s, "mer")
+	rec := sampleRecord("mer")
+	rec.Metadata.Permissions = domain.PermissionModeBypassPermissions
+
+	created, err := s.CreateSession(ctx, rec)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, found, err := s.GetSession(ctx, created.ID)
+	if err != nil || !found {
+		t.Fatalf("get: found=%v err=%v", found, err)
+	}
+	if got.Metadata.Permissions != domain.PermissionModeBypassPermissions {
+		t.Fatalf("created permissions = %q, want bypass", got.Metadata.Permissions)
+	}
+
+	got.Metadata.Permissions = domain.PermissionModeDefault
+	if err := s.UpdateSession(ctx, got); err != nil {
+		t.Fatal(err)
+	}
+	listed, err := s.ListSessions(ctx, "mer")
+	if err != nil || len(listed) != 1 {
+		t.Fatalf("listed sessions = %+v err=%v", listed, err)
+	}
+	if listed[0].Metadata.Permissions != domain.PermissionModeDefault {
+		t.Fatalf("updated permissions = %q, want default", listed[0].Metadata.Permissions)
+	}
+}
+
 func TestSessionUpdateActivityAndTermination(t *testing.T) {
 	s := newTestStore(t)
 	ctx := context.Background()
