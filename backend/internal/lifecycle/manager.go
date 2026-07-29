@@ -646,5 +646,9 @@ func mergeMetadata(base, in domain.SessionMetadata) domain.SessionMetadata {
 	base.RuntimeLaunchID = in.RuntimeLaunchID
 	set(&base.AgentSessionID, in.AgentSessionID)
 	set(&base.Prompt, in.Prompt)
+	// Permissions is the effective mode for this specific launch. Assign it
+	// even when empty so a restore under a stricter/default project config
+	// cannot inherit an earlier bypass-mode launch fact.
+	base.Permissions = in.Permissions
 	return base
 }

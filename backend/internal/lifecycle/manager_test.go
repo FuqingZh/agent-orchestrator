@@ -551,6 +551,7 @@ func TestMarkSpawnedStoresRuntimeMetadata(t *testing.T) {
 		RuntimeHandleID:   "h1",
 		AgentSessionID:    "agent",
 		Prompt:            "prompt",
+		Permissions:       domain.PermissionModeBypassPermissions,
 	}
 	if err := m.MarkSpawned(ctx, "mer-1", metadata); err != nil {
 		t.Fatal(err)
@@ -561,6 +562,27 @@ func TestMarkSpawnedStoresRuntimeMetadata(t *testing.T) {
 	}
 	if got.Metadata.WorkspaceRepoPath != metadata.WorkspaceRepoPath {
 		t.Fatalf("workspace repo path = %q, want %q", got.Metadata.WorkspaceRepoPath, metadata.WorkspaceRepoPath)
+	}
+	if got.Metadata.Permissions != metadata.Permissions {
+		t.Fatalf("permissions = %q, want %q", got.Metadata.Permissions, metadata.Permissions)
+	}
+}
+
+func TestMarkSpawnedClearsEarlierBypassPermissionFact(t *testing.T) {
+	m, st, _ := newManager()
+	st.sessions["mer-1"] = domain.SessionRecord{
+		ID:           "mer-1",
+		ProjectID:    "mer",
+		IsTerminated: true,
+		Metadata: domain.SessionMetadata{
+			Permissions: domain.PermissionModeBypassPermissions,
+		},
+	}
+	if err := m.MarkSpawned(ctx, "mer-1", domain.SessionMetadata{RuntimeHandleID: "h1"}); err != nil {
+		t.Fatal(err)
+	}
+	if got := st.sessions["mer-1"].Metadata.Permissions; got != "" {
+		t.Fatalf("permissions = %q, want cleared for stricter/default relaunch", got)
 	}
 }
 
