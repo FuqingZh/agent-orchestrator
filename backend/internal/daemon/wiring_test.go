@@ -525,6 +525,27 @@ func (c *captureMessenger) Send(_ context.Context, id domain.SessionID, msg stri
 	return nil
 }
 
+func TestWiring_LifecycleMessengerRebindsDelegate(t *testing.T) {
+	fallback := &captureMessenger{}
+	confirmed := &captureMessenger{}
+	messenger := newLifecycleMessenger(fallback)
+
+	if err := messenger.Send(context.Background(), "ao-1", "before bind"); err != nil {
+		t.Fatal(err)
+	}
+	messenger.Bind(confirmed)
+	if err := messenger.Send(context.Background(), "ao-1", "after bind"); err != nil {
+		t.Fatal(err)
+	}
+
+	if len(fallback.msgs) != 1 || fallback.msgs[0].msg != "before bind" {
+		t.Fatalf("fallback messages = %#v", fallback.msgs)
+	}
+	if len(confirmed.msgs) != 1 || confirmed.msgs[0].msg != "after bind" {
+		t.Fatalf("confirmed messages = %#v", confirmed.msgs)
+	}
+}
+
 // TestWiring_StartLifecycleThreadsMessengerIntoLCM asserts startLifecycle
 // constructs the LCM with a real messenger by driving an SCM observation
 // through the wired stack and checking the messenger receives the CI-failure

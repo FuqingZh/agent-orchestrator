@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log/slog"
 	"path/filepath"
+	"sync"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters"
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/agent/activitydispatch"
@@ -247,6 +248,40 @@ func (m runtimeMessenger) Send(ctx context.Context, id domain.SessionID, message
 // send is intentionally minimal: submit the message to the live runtime pane.
 func newSessionMessenger(store *sqlite.Store, runtime runtimeMessageSender, _ *slog.Logger) ports.AgentMessenger {
 	return runtimeMessenger{store: store, runtime: runtime}
+}
+
+// lifecycleMessenger starts with the raw runtime messenger during daemon
+// construction, then binds to the session service once it exists. The session
+// service confirms prompt submission and safely re-sends Enter for harnesses
+// that expose submit and blocked activity signals. SCM-triggered review nudges
+// therefore use the same delivery behavior as ao send without introducing a
+// Lifecycle Manager <-> Session Manager construction cycle.
+type lifecycleMessenger struct {
+	mu       sync.RWMutex
+	delegate ports.AgentMessenger
+}
+
+func newLifecycleMessenger(fallback ports.AgentMessenger) *lifecycleMessenger {
+	return &lifecycleMessenger{delegate: fallback}
+}
+
+func (m *lifecycleMessenger) Bind(delegate ports.AgentMessenger) {
+	if delegate == nil {
+		return
+	}
+	m.mu.Lock()
+	m.delegate = delegate
+	m.mu.Unlock()
+}
+
+func (m *lifecycleMessenger) Send(ctx context.Context, id domain.SessionID, message string) error {
+	m.mu.RLock()
+	delegate := m.delegate
+	m.mu.RUnlock()
+	if delegate == nil {
+		return fmt.Errorf("lifecycle messenger is not configured")
+	}
+	return delegate.Send(ctx, id, message)
 }
 
 // buildAgentRegistry returns a registry populated with the agent adapters the
