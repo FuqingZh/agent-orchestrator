@@ -506,6 +506,7 @@ func (m *Manager) Spawn(ctx context.Context, cfg ports.SpawnConfig) (domain.Sess
 		RuntimeHandleID:   handle.ID,
 		RuntimeLaunchID:   launchID,
 		Prompt:            prompt,
+		Permissions:       agentConfig.Permissions,
 	}
 	if err := m.lcm.MarkSpawned(ctx, id, metadata); err != nil {
 		runtimeDestroyed := m.runtime.Destroy(ctx, handle) == nil
@@ -1187,6 +1188,7 @@ func (m *Manager) relaunchSession(ctx context.Context, operation string, rec dom
 		RuntimeLaunchID:   launchID,
 		AgentSessionID:    rec.Metadata.AgentSessionID,
 		Prompt:            rec.Metadata.Prompt,
+		Permissions:       agentConfig.Permissions,
 	}
 	if err := m.lcm.MarkSpawned(ctx, rec.ID, metadata); err != nil {
 		_ = m.runtime.Destroy(ctx, handle)
@@ -1922,7 +1924,7 @@ func (m *Manager) Send(ctx context.Context, id domain.SessionID, message string)
 	if !ok {
 		return nil
 	}
-	if m.harnessNudgeSafe(rec.Harness) {
+	if m.harnessNudgeSafe(rec) {
 		m.confirmActive(ctx, m.messenger, id)
 	}
 	return nil
@@ -1961,21 +1963,28 @@ USER MESSAGE:
 %s`, project, project, message)
 }
 
-// harnessNudgeSafe reports whether the session's harness is safe to nudge with
-// an Enter-only re-send (see ports.ActivitySignaler): it must emit BOTH a
-// prompt-submit signal (else the loop wastes its budget never observing active)
-// and a blocked signal (else an Enter meant to resubmit a draft could answer a
-// permission dialog the harness cannot report).
-func (m *Manager) harnessNudgeSafe(harness domain.AgentHarness) bool {
+// harnessNudgeSafe reports whether the session is safe to nudge with an
+// Enter-only re-send (see ports.ActivitySignaler). Normally the harness must
+// emit both prompt-submit and blocked signals. Codex is also safe when this
+// session's durable launch metadata proves it was started in bypass mode,
+// because no permission dialog can be accepted by the automated Enter.
+func (m *Manager) harnessNudgeSafe(rec domain.SessionRecord) bool {
 	if m.agents == nil {
 		return false
 	}
-	agent, ok := m.agents.Agent(harness)
+	agent, ok := m.agents.Agent(rec.Harness)
 	if !ok {
 		return false
 	}
 	s, ok := agent.(ports.ActivitySignaler)
-	return ok && s.EmitsSubmitActivity() && s.EmitsBlockedActivity()
+	if !ok || !s.EmitsSubmitActivity() {
+		return false
+	}
+	if s.EmitsBlockedActivity() {
+		return true
+	}
+	return rec.Harness == domain.HarnessCodex &&
+		rec.Metadata.Permissions == domain.PermissionModeBypassPermissions
 }
 
 // waitOutcome is one poll round's verdict on whether confirmActive should

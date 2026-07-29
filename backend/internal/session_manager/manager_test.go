@@ -2508,7 +2508,7 @@ func TestSpawn_ForwardsResolvedAgentConfigPermissions(t *testing.T) {
 	lookPath := func(string) (string, error) { return "/bin/true", nil }
 	m := New(Deps{Runtime: &fakeRuntime{}, Agents: singleAgent{agent: agent}, Workspace: &fakeWorkspace{}, Store: st, Messenger: &fakeMessenger{}, Lifecycle: &fakeLCM{store: st}, LookPath: lookPath})
 
-	_, _, _, err := m.Spawn(ctx, ports.SpawnConfig{ProjectID: "mer", Kind: domain.KindWorker})
+	session, _, _, err := m.Spawn(ctx, ports.SpawnConfig{ProjectID: "mer", Kind: domain.KindWorker})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -2518,6 +2518,9 @@ func TestSpawn_ForwardsResolvedAgentConfigPermissions(t *testing.T) {
 	}
 	if agent.lastLaunch.Permissions != domain.PermissionModeBypassPermissions {
 		t.Fatalf("launch permissions = %q, want bypass", agent.lastLaunch.Permissions)
+	}
+	if session.Metadata.Permissions != domain.PermissionModeBypassPermissions {
+		t.Fatalf("session metadata permissions = %q, want bypass", session.Metadata.Permissions)
 	}
 }
 
@@ -2536,7 +2539,7 @@ func TestRestore_ForwardsResolvedAgentConfigPermissions(t *testing.T) {
 	agent := &recordingAgent{}
 	m := New(Deps{Runtime: &fakeRuntime{}, Agents: singleAgent{agent: agent}, Workspace: &fakeWorkspace{}, Store: st, Messenger: &fakeMessenger{}, Lifecycle: &fakeLCM{store: st}, LookPath: func(string) (string, error) { return "/bin/true", nil }})
 
-	_, err := m.RestoreWithMode(ctx, "mer-1")
+	result, err := m.RestoreWithMode(ctx, "mer-1")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -2546,6 +2549,9 @@ func TestRestore_ForwardsResolvedAgentConfigPermissions(t *testing.T) {
 	}
 	if agent.lastRestore.Permissions != domain.PermissionModeBypassPermissions {
 		t.Fatalf("restore permissions = %q, want bypass", agent.lastRestore.Permissions)
+	}
+	if result.Session.Metadata.Permissions != domain.PermissionModeBypassPermissions {
+		t.Fatalf("session metadata permissions = %q, want bypass", result.Session.Metadata.Permissions)
 	}
 }
 
@@ -6123,21 +6129,70 @@ func TestSend_SkipsConfirmForSubmitOnlyHarness(t *testing.T) {
 	}
 }
 
+func TestSend_ConfirmsSubmitOnlyCodexInBypassMode(t *testing.T) {
+	st := newFakeStore()
+	st.sessions["s1"] = domain.SessionRecord{
+		ID:      "s1",
+		Harness: domain.HarnessCodex,
+		Activity: domain.Activity{
+			State: domain.ActivityIdle,
+		},
+		Metadata: domain.SessionMetadata{
+			Permissions: domain.PermissionModeBypassPermissions,
+		},
+	}
+	msg := &flipOnNudgeMessenger{sessionID: "s1", store: st}
+	m := newSendTestManager(t, submitOnlyAgent{}, msg, st)
+
+	if err := m.Send(context.Background(), "s1", "do the thing"); err != nil {
+		t.Fatalf("Send: %v", err)
+	}
+	if len(msg.msgs) != 2 {
+		t.Fatalf("Send calls = %d, want 2 (initial + one safe bypass-mode nudge)", len(msg.msgs))
+	}
+}
+
+func TestSend_SkipsConfirmForSubmitOnlyCodexWithoutBypassLaunchFact(t *testing.T) {
+	st := newFakeStore()
+	st.sessions["s1"] = domain.SessionRecord{
+		ID:       "s1",
+		Harness:  domain.HarnessCodex,
+		Activity: domain.Activity{State: domain.ActivityIdle},
+	}
+	msg := &fakeMessenger{}
+	m := newSendTestManager(t, submitOnlyAgent{}, msg, st)
+
+	if err := m.Send(context.Background(), "s1", "do the thing"); err != nil {
+		t.Fatalf("Send: %v", err)
+	}
+	if len(msg.msgs) != 1 {
+		t.Fatalf("Send calls = %d, want 1 (launch permission is unknown)", len(msg.msgs))
+	}
+}
+
 func TestHarnessNudgeSafe(t *testing.T) {
 	m := New(Deps{Agents: singleAgent{agent: fakeAgent{}}})
-	if m.harnessNudgeSafe("claude-code") {
+	if m.harnessNudgeSafe(domain.SessionRecord{Harness: "claude-code"}) {
 		t.Fatalf("hookless agent reported as nudge-safe")
 	}
 	m2 := New(Deps{Agents: singleAgent{agent: signalingAgent{}}})
-	if !m2.harnessNudgeSafe("claude-code") {
+	if !m2.harnessNudgeSafe(domain.SessionRecord{Harness: "claude-code"}) {
 		t.Fatalf("submit+blocked agent not reported as nudge-safe")
 	}
 	m3 := New(Deps{Agents: singleAgent{agent: submitOnlyAgent{}}})
-	if m3.harnessNudgeSafe("claude-code") {
+	if m3.harnessNudgeSafe(domain.SessionRecord{Harness: "claude-code"}) {
 		t.Fatalf("submit-only agent (no blocked signal) reported as nudge-safe")
 	}
+	if !m3.harnessNudgeSafe(domain.SessionRecord{
+		Harness: domain.HarnessCodex,
+		Metadata: domain.SessionMetadata{
+			Permissions: domain.PermissionModeBypassPermissions,
+		},
+	}) {
+		t.Fatalf("bypass-mode Codex submit-only agent not reported as nudge-safe")
+	}
 	m4 := New(Deps{Agents: missingAgents{}})
-	if m4.harnessNudgeSafe("claude-code") {
+	if m4.harnessNudgeSafe(domain.SessionRecord{Harness: "claude-code"}) {
 		t.Fatalf("unresolved harness reported as nudge-safe")
 	}
 }

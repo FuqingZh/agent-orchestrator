@@ -32,6 +32,10 @@ type SessionMetadata struct {
 	RuntimeLaunchID   string `json:"runtimeLaunchId,omitempty"`
 	AgentSessionID    string `json:"agentSessionId,omitempty"`
 	Prompt            string `json:"prompt,omitempty"`
+	// Permissions records the effective permission mode used to launch this
+	// session. Session Manager uses this durable launch fact when deciding
+	// whether an Enter-only delivery confirmation is safe.
+	Permissions PermissionMode `json:"permissions,omitempty"`
 	// PreviewURL is the browser preview target the desktop app opens for this
 	// session. Set via `ao preview` (POST /sessions/{id}/preview); persisted so
 	// it survives a daemon restart. Empty means no preview has been requested.
