@@ -219,8 +219,8 @@ type runtimeMessageSender interface {
 }
 
 // codexSubmitNudger is an optional tmux capability. Codex can absorb Enter as
-// pasted input immediately after a multiline prompt; Tab ends that paste burst
-// and submits while Codex is idle. The durable session facts below strictly
+// pasted input immediately after a multiline prompt; a non-character key ends
+// that paste burst before submission. The durable session facts below strictly
 // gate its use so other harnesses retain the generic Enter nudge.
 type codexSubmitNudger interface {
 	SendCodexSubmitNudge(ctx context.Context, handle ports.RuntimeHandle) error

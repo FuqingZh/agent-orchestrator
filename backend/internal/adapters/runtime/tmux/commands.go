@@ -112,11 +112,11 @@ func sendEnterArgs(id string) []string {
 	return []string{"send-keys", "-t", id, "Enter"}
 }
 
-// sendTabArgs builds args for `tmux send-keys -t <id> Tab`. Codex treats Tab
-// as queue/submit after a paste burst, while Enter can still be classified as
-// part of the pasted multiline input.
-func sendTabArgs(id string) []string {
-	return []string{"send-keys", "-t", id, "Tab"}
+// sendRightArgs builds args for `tmux send-keys -t <id> Right`. Codex treats a
+// non-character key as the end of any rapid paste burst. At the composer end
+// this key does not change the draft, but makes a following Enter unambiguous.
+func sendRightArgs(id string) []string {
+	return []string{"send-keys", "-t", id, "Right"}
 }
 
 // sendInterruptArgs builds args for `tmux send-keys -t <id> C-c` to interrupt

@@ -459,7 +459,7 @@ func TestWiring_SessionMessengerSelectsCodexTabNudge(t *testing.T) {
 		wantMessages    int
 	}{
 		{
-			name:            "Codex bypass session uses Tab",
+			name:            "Codex bypass session uses paste-safe submit",
 			harness:         domain.HarnessCodex,
 			permissions:     domain.PermissionModeBypassPermissions,
 			wantCodexNudges: 1,

@@ -29,6 +29,9 @@ const (
 	// a non-empty message, before the trailing Enter, so a large multiline paste
 	// does not absorb the Enter and leave the prompt unsubmitted (issue #2342).
 	defaultEnterDelay = 300 * time.Millisecond
+	// defaultCodexSubmitDelay gives Codex one UI tick to process the Right key
+	// that terminates rapid-paste classification before Enter submits.
+	defaultCodexSubmitDelay = 100 * time.Millisecond
 	// defaultReapGrace is how long Destroy waits between SIGTERM and SIGKILL when
 	// reaping a pane's leftover background processes, giving them a chance to
 	// exit cleanly (release ports) before being forced (issue #2523).
@@ -537,9 +540,8 @@ func (r *Runtime) SendMessage(ctx context.Context, handle ports.RuntimeHandle, m
 }
 
 // SendCodexSubmitNudge submits a draft already present in the Codex composer.
-// Codex uses Tab as its queue key and, while idle, handles it like submit.
-// Unlike Enter, Tab also terminates Codex's rapid-paste classification, so a
-// lifecycle confirmation cannot be absorbed as another multiline paste.
+// Right first terminates Codex's rapid-paste classification without changing a
+// draft whose cursor is already at the paste endpoint; Enter then submits it.
 //
 // This is intentionally not part of ports.Runtime. The daemon discovers it as
 // an optional tmux capability only for a durable Codex bypass-permissions
@@ -549,8 +551,23 @@ func (r *Runtime) SendCodexSubmitNudge(ctx context.Context, handle ports.Runtime
 	if err != nil {
 		return err
 	}
-	if _, err := r.run(ctx, sendTabArgs(id)...); err != nil {
-		return fmt.Errorf("tmux runtime: send Codex submit nudge %s: %w", id, err)
+	if _, err := r.run(ctx, sendRightArgs(id)...); err != nil {
+		return fmt.Errorf("tmux runtime: end Codex paste burst %s: %w", id, err)
+	}
+	submitCtx, cancel := context.WithTimeout(
+		context.WithoutCancel(ctx),
+		r.timeout+defaultCodexSubmitDelay,
+	)
+	defer cancel()
+	timer := time.NewTimer(defaultCodexSubmitDelay)
+	defer timer.Stop()
+	select {
+	case <-submitCtx.Done():
+		return submitCtx.Err()
+	case <-timer.C:
+	}
+	if _, err := r.run(submitCtx, sendEnterArgs(id)...); err != nil {
+		return fmt.Errorf("tmux runtime: submit Codex draft %s: %w", id, err)
 	}
 	return nil
 }
