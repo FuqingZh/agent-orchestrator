@@ -15,8 +15,9 @@ The last common baseline is upstream `v0.11.1` at `2f6d98f2`. Fork `main` is
 `2a3eb0e8`; it contains the upstream-first convergence plus the retained
 adapters. Upstream `v0.11.2` is the next stable release at `c5523a6d`. Relative
 to that release, the two lines contain 31 upstream-side and 40 fork-side
-commits. Upstream `main` is moving faster and already contains migration
-numbers that collide with the fork's immutable shipped migrations.
+commits. The release adds `0038_orchestrator_reengagement.sql`, whose version
+collides with the fork's immutable shipped migration `0038`. Upstream `main`
+continues with further colliding migration numbers.
 
 The fork has shipped these migration numbers:
 
@@ -62,14 +63,15 @@ fork's old long-prompt submission workaround where upstream message delivery
 now supplies the same contract. Retain the tmux test-isolation change only if a
 focused v0.11.2 reproduction still demonstrates the original failure.
 
-Keep the shipped fork migrations byte-for-byte unchanged. For v0.11.2, omit
+Keep the shipped fork migrations byte-for-byte unchanged. Continue to omit
 upstream's `0037_drop_worker_idle_outbox.sql` from the resulting fork tree and
-record it as semantically represented by fork migration `0038`. Before taking
-a later upstream baseline, map every colliding upstream migration to the next
-unused fork number and preserve a source-file and content-hash ledger. Based on
-the current upstream sequence, the prospective mapping is upstream
-`0038/0039/0040` to fork `0040/0041/0042`; the actual mapping is fixed only by
-the future pinned release.
+record it as semantically represented by fork migration `0038`. For v0.11.2,
+rename upstream `0038_orchestrator_reengagement.sql` to fork
+`0040_orchestrator_reengagement.sql` without changing its contents. Preserve a
+source-file and content-hash ledger for both mappings. Before taking a later
+upstream baseline, map every further collision to the next unused fork number;
+based on the current upstream sequence, upstream `0039/0040` would become fork
+`0041/0042`, subject to verification against that future pinned release.
 
 Keep source convergence separate from host deployment. A merged and validated
 source baseline does not authorize replacement of the installed compatibility

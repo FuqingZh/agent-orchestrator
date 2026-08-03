@@ -9,6 +9,11 @@ This file tracks progress. For what the product _is_ and how to run it, see the
 top-level [`README.md`](../README.md); for the backend mental model see
 [`architecture.md`](architecture.md).
 
+This fork is synchronized to upstream `v0.11.2` and keeps only the downstream
+boundaries listed in [`downstream-patches.md`](downstream-patches.md). Shipped
+migration-number compatibility is recorded in
+[`upstream-migration-map.md`](upstream-migration-map.md).
+
 ## Build & test
 
 The local gate is the backend Go build and race-enabled test suite:
@@ -18,7 +23,8 @@ cd backend && go build ./... && go test -race ./...
 ```
 
 `npm run lint` (from the repo root) runs `go test ./...` plus golangci-lint.
-Frontend checks live under `frontend/` (`npm run typecheck`, `npm run build`).
+Frontend checks live under `frontend/` (`npm run typecheck`,
+`npm run typecheck:e2e`, and `npm test`).
 See [`AGENTS.md`](../AGENTS.md) for the regen workflow when touching the API
 surface (`npm run sqlc`, `npm run api`).
 
@@ -66,6 +72,24 @@ surface (`npm run sqlc`, `npm run api`).
 ### Frontend (Electron + React)
 
 - Electron + React 19 + TanStack Router/Query + Tailwind + shadcn primitives.
+- Target-isolated per-session browser-control spike: a dedicated local
+  daemon↔Electron bridge drives only the selected session's `WebContentsView`
+  through Electron's bound debugger transport. `ao browser` supports open,
+  compact accessibility snapshots and refs, click/fill/type, keyboard input,
+  hover and non-mutating element highlighting, scrolling, selection and checked
+  state, property reads, stable logical tabs and captured popups, a compact
+  user-facing tab selector for switching/closing tabs and popup notices, waits,
+  including load/disappearance/DOM-stability conditions, screenshots, console
+  messages, page errors, and explicit temporary network-metadata capture while
+  the Browser panel is hidden. Network capture is off by default, tab-scoped,
+  bounded, automatically expires, and omits bodies and sensitive values. Tabs
+  within one worker share an ephemeral Electron profile; different workers
+  have isolated cookies and web storage. The toolbar activity signal is scoped
+  to actual agent browser commands; annotation progress is separate and its
+  successful-delivery confirmation clears automatically.
+- Preview targets are explicit: `ao preview`, `ao preview <target>`, or
+  `ao preview start` selects what the panel shows. The desktop poller no longer
+  auto-discovers a static entry point merely because a fresh worker exists.
 - Real daemon wiring via the generated `openapi-fetch` typed client
   (`src/api/schema.ts`); mock data only in `VITE_NO_ELECTRON` web-preview mode.
 - Electron main handles daemon discovery, launch, and status reporting.
