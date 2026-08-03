@@ -9,6 +9,11 @@ This file tracks progress. For what the product _is_ and how to run it, see the
 top-level [`README.md`](../README.md); for the backend mental model see
 [`architecture.md`](architecture.md).
 
+This fork is synchronized to upstream `v0.11.2` and keeps only the downstream
+boundaries listed in [`downstream-patches.md`](downstream-patches.md). Shipped
+migration-number compatibility is recorded in
+[`upstream-migration-map.md`](upstream-migration-map.md).
+
 ## Build & test
 
 The local gate is the backend Go build and race-enabled test suite:
