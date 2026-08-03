@@ -17,6 +17,17 @@ The source and fork files in each row must remain byte-identical. Verification
 checks the content hash, uniqueness of the numeric fork versions, fresh schema
 creation, and upgrade from both upstream and fork database histories.
 
-The next unused fork migration version after this baseline is `0041`. Future
+The workstation compatibility lineage deployed a different immutable `0040`,
+`0040_add_session_launch_permissions.sql`, before this baseline was merged.
+Those databases therefore skip `0040_orchestrator_reengagement.sql` by version
+even though its table is absent. Migration
+`0041_repair_orchestrator_reengagement.sql` idempotently converges both
+histories: it is a no-op after the mapped upstream `0040`, and creates the
+missing table and indexes after the deployed calibration `0040`. Its down path
+intentionally preserves the table because logical ownership remains with
+`0040` on fresh databases.
+
+The next unused fork migration version after this compatibility repair is
+`0042`. Future
 upstream migrations are mapped only when a stable release is pinned; current
 upstream `main` is not migration authority for this fork.
