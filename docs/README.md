@@ -20,6 +20,8 @@ Start with [architecture.md](architecture.md) for the current backend model and
 | [stack.md](stack.md)                                   | Accepted library/runtime choices, pending stack decisions, and dependencies explicitly avoided for V1.                |
 | [telemetry.md](telemetry.md)                           | Telemetry collection, privacy safeguards, configuration, and PostHog dashboard guidance.                              |
 | [adr/0002-upstream-first-orchestration-convergence.md](adr/0002-upstream-first-orchestration-convergence.md) | Why the fork uses upstream AO lifecycle and keeps Linear as a thin intake adapter. |
+| [adr/0003-stable-upstream-baseline-sync.md](adr/0003-stable-upstream-baseline-sync.md) | Why the fork synchronizes from pinned stable releases and preserves a minimal downstream delta. |
+| [plans/2026-08-03-v0.11.2-baseline-sync.md](plans/2026-08-03-v0.11.2-baseline-sync.md) | Active execution plan for synchronizing the fork to upstream v0.11.2. |
 
 ## Mental model
 
