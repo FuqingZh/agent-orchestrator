@@ -26,3 +26,5 @@ Migration numbering is tracked separately in
 [`upstream-migration-map.md`](upstream-migration-map.md). Documentation,
 generated API artifacts, immutable migration history, and mechanical removal of
 trailing whitespace from an upstream SVG are not additional product patches.
+Migration `0041` is a schema-convergence repair for an already deployed fork
+version collision, not a new runtime capability.

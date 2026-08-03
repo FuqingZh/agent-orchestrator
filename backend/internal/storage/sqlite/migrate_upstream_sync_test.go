@@ -33,7 +33,7 @@ func TestUpstreamBaselineMigrationCompatibility(t *testing.T) {
 
 			assertTableExists(t, db, "orchestrator_reengagements", true)
 			assertTableExists(t, db, "workflow_issue_runs", false)
-			assertTableExists(t, db, "worker_idle_outbox", false)
+			assertTableExists(t, db, "worker_idle_events", false)
 
 			var current int64
 			if err := db.QueryRow(`
@@ -43,8 +43,8 @@ WHERE is_applied = 1
 `).Scan(&current); err != nil {
 				t.Fatalf("read current migration version: %v", err)
 			}
-			if current != 40 {
-				t.Fatalf("current migration version = %d, want 40", current)
+			if current != 41 {
+				t.Fatalf("current migration version = %d, want 41", current)
 			}
 
 			var appliedBefore int
@@ -70,6 +70,56 @@ WHERE is_applied = 1
 				t.Fatalf("repeat migrate changed applied count: before=%d after=%d", appliedBefore, appliedAfter)
 			}
 		})
+	}
+}
+
+func TestMigrationRepairsDeployedCalibrationVersion40Collision(t *testing.T) {
+	db, err := sql.Open("sqlite", "file:"+filepath.Join(t.TempDir(), "ao.db")+pragmas)
+	if err != nil {
+		t.Fatalf("open sqlite: %v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+
+	upTo(t, db, 36)
+	if _, err := db.Exec(`
+DROP TABLE worker_idle_events;
+ALTER TABLE sessions ADD COLUMN launch_permissions TEXT NOT NULL DEFAULT ''
+    CHECK (launch_permissions IN ('', 'default', 'accept-edits', 'auto', 'bypass-permissions'));
+INSERT INTO goose_db_version (version_id, is_applied) VALUES
+    (37, 1), (38, 1), (39, 1), (40, 1);
+`); err != nil {
+		t.Fatalf("seed deployed calibration version 40 history: %v", err)
+	}
+
+	assertTableExists(t, db, "orchestrator_reengagements", false)
+	if err := migrate(db); err != nil {
+		t.Fatalf("migrate deployed calibration version 40 database: %v", err)
+	}
+	assertTableExists(t, db, "orchestrator_reengagements", true)
+	assertTableExists(t, db, "worker_idle_events", false)
+
+	var launchPermissionsColumns int
+	if err := db.QueryRow(`
+SELECT COUNT(*)
+FROM pragma_table_info('sessions')
+WHERE name = 'launch_permissions'
+`).Scan(&launchPermissionsColumns); err != nil {
+		t.Fatalf("inspect launch_permissions column: %v", err)
+	}
+	if launchPermissionsColumns != 1 {
+		t.Fatalf("launch_permissions columns = %d, want 1", launchPermissionsColumns)
+	}
+
+	var current int64
+	if err := db.QueryRow(`
+SELECT MAX(version_id)
+FROM goose_db_version
+WHERE is_applied = 1
+`).Scan(&current); err != nil {
+		t.Fatalf("read repaired migration version: %v", err)
+	}
+	if current != 41 {
+		t.Fatalf("repaired migration version = %d, want 41", current)
 	}
 }
 
