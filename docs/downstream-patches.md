@@ -1,6 +1,6 @@
 # Downstream patch ledger
 
-Status: current for the v0.11.2 fork baseline
+Status: current for upstream `main` snapshot `5f3e6bcd`
 
 This ledger classifies every intentional runtime or test-harness difference
 between upstream `v0.11.2` and this fork. A downstream patch remains only while
