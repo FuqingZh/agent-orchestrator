@@ -2,7 +2,12 @@
 
 Date: 2026-08-03
 
-Status: accepted
+Status: accepted; merge-target policy superseded by ADR 0004
+
+ADR 0004 permits an explicitly authorized, SHA-pinned upstream `main` snapshot
+for the development fork. This decision remains the authority for the v0.11.2
+historical synchronization, migration immutability, downstream-delta audit, and
+separate production-deployment boundary.
 
 ## Context
 
