@@ -2,9 +2,9 @@
 
 ## Status
 
-Implementation and local verification are complete in the fork candidate.
-Upstream issue and pull request publication remain out of scope until the
-candidate branch is pushed and its exact commit is read back.
+Implementation, local verification, and fork candidate publication are
+complete. Upstream issue and pull request publication are the next phase and
+remain out of scope for this task.
 
 ## Problem
 
@@ -175,6 +175,12 @@ child process disappeared, the live handle was cleared, the running pass was
 cancelled, and completed history remained. The canary does not claim
 containment of independently detached descendants; that is a separate runtime
 hardening boundary.
+
+The fork branch push was read back successfully and matched the local head.
+An ordinary feature-branch push does not trigger this repository's pull-request
+workflows, so GitHub reported no check runs for the candidate; no remote CI pass
+is claimed. Exact-toolchain CI remains required on the eventual upstream pull
+request.
 
 ## Delivery Boundary
 
