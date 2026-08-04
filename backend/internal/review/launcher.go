@@ -37,6 +37,8 @@ type Launcher interface {
 	Alive(ctx context.Context, handleID string) (bool, error)
 	// Cancel interrupts a running reviewer pane while keeping the terminal alive.
 	Cancel(ctx context.Context, handleID string, harness domain.ReviewerHarness) error
+	// Destroy permanently removes a reviewer pane during worker teardown.
+	Destroy(ctx context.Context, handleID string) error
 }
 
 // LaunchSpec is the engine's request to (re)launch a reviewer for one pass.
@@ -258,6 +260,13 @@ func (l *agentLauncher) Alive(ctx context.Context, handleID string) (bool, error
 		return false, nil
 	}
 	return l.runtime.IsAlive(ctx, ports.RuntimeHandle{ID: handleID})
+}
+
+func (l *agentLauncher) Destroy(ctx context.Context, handleID string) error {
+	if handleID == "" {
+		return nil
+	}
+	return l.runtime.Destroy(ctx, ports.RuntimeHandle{ID: handleID})
 }
 
 func (l *agentLauncher) Cancel(ctx context.Context, handleID string, harness domain.ReviewerHarness) error {

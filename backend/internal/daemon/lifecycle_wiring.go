@@ -157,6 +157,19 @@ func startSession(cfg config.Config, runtime runtimeselect.Runtime, store *sqlit
 		Scratch:  scratchWS,
 		Projects: store,
 	})
+	// Build the review engine before Session Manager so every worker teardown
+	// can close its auxiliary reviewer runtime through a narrow lifecycle gate.
+	reviewers, err := reviewer.NewResolver()
+	if err != nil {
+		return nil, nil, nil, fmt.Errorf("reviewer resolver: %w", err)
+	}
+	reviewEngine := reviewcore.New(reviewcore.Deps{
+		Store:    store,
+		Sessions: store,
+		PRs:      store,
+		Projects: store,
+		Launcher: reviewcore.NewLauncher(reviewers, runtime, cfg.DataDir),
+	})
 	mgr := sessionmanager.New(sessionmanager.Deps{
 		Runtime:             runtime,
 		Agents:              agents,
@@ -165,6 +178,7 @@ func startSession(cfg config.Config, runtime runtimeselect.Runtime, store *sqlit
 		Messenger:           messenger,
 		Lifecycle:           lcm,
 		Preview:             previewLifecycle,
+		Reviewer:            reviewEngine,
 		Browser:             browserLifecycle,
 		BrowserCapabilities: browserCapabilities,
 		DataDir:             cfg.DataDir,
@@ -197,21 +211,6 @@ func startSession(cfg config.Config, runtime runtimeselect.Runtime, store *sqlit
 		// no_signal only makes sense for harnesses whose adapters install
 		// activity hooks; the deriver registry is the source of truth for that.
 		SignalCapable: activitydispatch.SupportsHarness,
-	})
-	// Triggering a review spawns a reviewer over the worker's worktree, resolved
-	// from the reviewer registry (distinct from the worker agent set). The
-	// reviewer posts its review to the PR itself, so the service needs no SCM
-	// writer.
-	reviewers, err := reviewer.NewResolver()
-	if err != nil {
-		return nil, nil, nil, fmt.Errorf("reviewer resolver: %w", err)
-	}
-	reviewEngine := reviewcore.New(reviewcore.Deps{
-		Store:    store,
-		Sessions: store,
-		PRs:      store,
-		Projects: store,
-		Launcher: reviewcore.NewLauncher(reviewers, runtime, cfg.DataDir),
 	})
 	reviewSvc := reviewsvc.New(reviewEngine, store, reviewsvc.WithLifecycleReducer(lcm))
 	return sessionSvc, reviewSvc, mgr, nil

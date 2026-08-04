@@ -135,6 +135,23 @@ func (f fakeSessions) GetSession(_ context.Context, _ domain.SessionID) (domain.
 	return f.rec, f.ok, nil
 }
 
+type mutableSessions struct {
+	mu  sync.Mutex
+	rec domain.SessionRecord
+}
+
+func (s *mutableSessions) GetSession(_ context.Context, _ domain.SessionID) (domain.SessionRecord, bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.rec, true, nil
+}
+
+func (s *mutableSessions) terminate() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.rec.IsTerminated = true
+}
+
 type fakePRs struct{ prs []domain.PullRequest }
 
 func (f fakePRs) ListPRsBySession(_ context.Context, _ domain.SessionID) ([]domain.PullRequest, error) {
@@ -162,6 +179,8 @@ type fakeLauncher struct {
 	gotHandle        string
 	cancelledHandle  string
 	cancelledHarness domain.ReviewerHarness
+	destroyedHandle  string
+	destroyErr       error
 	specs            []LaunchSpec
 	handles          []string
 	preflightErr     error
@@ -194,6 +213,10 @@ func (f *fakeLauncher) Cancel(_ context.Context, handleID string, harness domain
 	f.cancelledHandle = handleID
 	f.cancelledHarness = harness
 	return f.cancelErr
+}
+func (f *fakeLauncher) Destroy(_ context.Context, handleID string) error {
+	f.destroyedHandle = handleID
+	return f.destroyErr
 }
 func (f *fakeLauncher) Preflight(_ context.Context, _ domain.ReviewerHarness, _ string) error {
 	f.preflighted = true
@@ -289,6 +312,124 @@ func TestCancelInterruptsReviewerAndCancelsRunningRuns(t *testing.T) {
 	}
 	if res.Reviews[0].Status == ReviewStateRunning {
 		t.Fatalf("review state still running: %+v", res.Reviews[0])
+	}
+}
+
+func TestBeginSessionTeardownDestroysReviewerAndRetainsHistory(t *testing.T) {
+	store := &fakeStore{
+		review: &domain.Review{ID: "rev-1", SessionID: "mer-1", Harness: domain.ReviewerCodex, ReviewerHandleID: "review-mer-1"},
+		runs: []domain.ReviewRun{
+			{ID: "run-1", ReviewID: "rev-1", SessionID: "mer-1", Status: domain.ReviewRunRunning},
+			{ID: "run-2", ReviewID: "rev-1", SessionID: "mer-1", Status: domain.ReviewRunComplete, Verdict: domain.VerdictApproved},
+		},
+	}
+	launcher := &fakeLauncher{}
+	eng := newEngineForTest(store, fakeSessions{rec: liveWorker(), ok: true}, fakePRs{}, fakeProjects{}, launcher)
+
+	release, err := eng.BeginSessionTeardown(context.Background(), "mer-1")
+	if err != nil {
+		t.Fatalf("BeginSessionTeardown: %v", err)
+	}
+	if release == nil {
+		t.Fatal("release = nil, want held trigger gate")
+	}
+	defer release()
+	if launcher.destroyedHandle != "review-mer-1" {
+		t.Fatalf("destroyed handle = %q, want review-mer-1", launcher.destroyedHandle)
+	}
+	if store.review == nil || store.review.ReviewerHandleID != "" {
+		t.Fatalf("review handle not cleared: %+v", store.review)
+	}
+	if store.runs[0].Status != domain.ReviewRunCancelled || store.runs[0].Body != "worker session terminated" {
+		t.Fatalf("running review not cancelled: %+v", store.runs[0])
+	}
+	if store.runs[1].Status != domain.ReviewRunComplete || store.runs[1].Verdict != domain.VerdictApproved {
+		t.Fatalf("review history changed: %+v", store.runs[1])
+	}
+}
+
+func TestBeginSessionTeardownPreservesStateWhenRuntimeDestroyFails(t *testing.T) {
+	store := &fakeStore{
+		review: &domain.Review{ID: "rev-1", SessionID: "mer-1", Harness: domain.ReviewerCodex, ReviewerHandleID: "review-mer-1"},
+		runs:   []domain.ReviewRun{{ID: "run-1", ReviewID: "rev-1", SessionID: "mer-1", Status: domain.ReviewRunRunning}},
+	}
+	launcher := &fakeLauncher{destroyErr: errors.New("tmux busy")}
+	eng := newEngineForTest(store, fakeSessions{rec: liveWorker(), ok: true}, fakePRs{}, fakeProjects{}, launcher)
+
+	release, err := eng.BeginSessionTeardown(context.Background(), "mer-1")
+	if err == nil || !strings.Contains(err.Error(), "runtime") {
+		t.Fatalf("release non-nil=%v err=%v, want runtime teardown failure", release != nil, err)
+	}
+	if release != nil {
+		t.Fatal("release must be nil after teardown releases its failed gate")
+	}
+	if store.review == nil || store.review.ReviewerHandleID != "review-mer-1" {
+		t.Fatalf("review handle changed after destroy failure: %+v", store.review)
+	}
+	if store.runs[0].Status != domain.ReviewRunRunning {
+		t.Fatalf("run changed after destroy failure: %+v", store.runs[0])
+	}
+}
+
+func TestBeginSessionTeardownCancelsRunningRunWhenHandleIsAlreadyGone(t *testing.T) {
+	store := &fakeStore{
+		review: &domain.Review{ID: "rev-1", SessionID: "mer-1", Harness: domain.ReviewerCodex},
+		runs:   []domain.ReviewRun{{ID: "run-1", ReviewID: "rev-1", SessionID: "mer-1", Status: domain.ReviewRunRunning}},
+	}
+	launcher := &fakeLauncher{}
+	eng := newEngineForTest(store, fakeSessions{rec: liveWorker(), ok: true}, fakePRs{}, fakeProjects{}, launcher)
+
+	release, err := eng.BeginSessionTeardown(context.Background(), "mer-1")
+	if err != nil {
+		t.Fatalf("BeginSessionTeardown: %v", err)
+	}
+	defer release()
+	if launcher.destroyedHandle != "" {
+		t.Fatalf("destroyed handle = %q, want none", launcher.destroyedHandle)
+	}
+	if store.runs[0].Status != domain.ReviewRunCancelled || store.runs[0].Body != "worker session terminated" {
+		t.Fatalf("running review not cancelled: %+v", store.runs[0])
+	}
+}
+
+func TestBeginSessionTeardownBlocksTriggerUntilWorkerIsTerminated(t *testing.T) {
+	store := &fakeStore{
+		review: &domain.Review{ID: "rev-1", SessionID: "mer-1", Harness: domain.ReviewerCodex, ReviewerHandleID: "review-mer-1"},
+	}
+	sessions := &mutableSessions{rec: liveWorker()}
+	launcher := &fakeLauncher{handle: "review-mer-1"}
+	eng := newEngineForTest(store, sessions, prAt("sha1"), fakeProjects{}, launcher)
+
+	release, err := eng.BeginSessionTeardown(context.Background(), "mer-1")
+	if err != nil {
+		t.Fatalf("BeginSessionTeardown: %v", err)
+	}
+	result := make(chan error, 1)
+	started := make(chan struct{})
+	go func() {
+		close(started)
+		_, triggerErr := eng.Trigger(context.Background(), "mer-1")
+		result <- triggerErr
+	}()
+	<-started
+	select {
+	case triggerErr := <-result:
+		t.Fatalf("Trigger returned before teardown release: %v", triggerErr)
+	case <-time.After(50 * time.Millisecond):
+	}
+
+	sessions.terminate()
+	release()
+	select {
+	case triggerErr := <-result:
+		if triggerErr == nil || !strings.Contains(triggerErr.Error(), "terminated") {
+			t.Fatalf("Trigger err = %v, want terminated worker", triggerErr)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("Trigger remained blocked after teardown release")
+	}
+	if launcher.spawnCount != 0 {
+		t.Fatalf("reviewer spawn count = %d, want 0", launcher.spawnCount)
 	}
 }
 

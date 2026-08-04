@@ -396,6 +396,48 @@ func (e *Engine) List(ctx stdctx.Context, workerID domain.SessionID) (SessionRev
 	return SessionReviews{ReviewerHandleID: handle, Runs: runs, Reviews: Plan(prs, runs)}, nil
 }
 
+// BeginSessionTeardown permanently closes a worker's reviewer while holding
+// the same per-worker gate Trigger uses. The caller must release the returned
+// function after it records the worker's terminal state, so a concurrent
+// trigger cannot recreate the reviewer in the teardown window.
+func (e *Engine) BeginSessionTeardown(ctx stdctx.Context, workerID domain.SessionID) (release func(), err error) {
+	if workerID == "" {
+		return nil, fmt.Errorf("%w: worker session id is required", ErrInvalid)
+	}
+
+	release = e.lockWorker(workerID)
+	fail := func(cause error) error {
+		release()
+		return cause
+	}
+
+	review, ok, err := e.store.GetReviewBySession(ctx, workerID)
+	if err != nil {
+		return nil, fail(fmt.Errorf("reviewer teardown lookup: %w", err))
+	}
+	if !ok {
+		return release, nil
+	}
+	if review.ReviewerHandleID != "" {
+		if err := e.launcher.Destroy(ctx, review.ReviewerHandleID); err != nil {
+			return nil, fail(fmt.Errorf("reviewer teardown runtime: %w", err))
+		}
+	}
+	cancelled, err := e.store.CancelRunningReviewRunsBySession(ctx, workerID, "worker session terminated")
+	if err != nil {
+		return nil, fail(fmt.Errorf("reviewer teardown runs: %w", err))
+	}
+	if review.ReviewerHandleID == "" && cancelled == 0 {
+		return release, nil
+	}
+	review.ReviewerHandleID = ""
+	review.UpdatedAt = e.clock()
+	if err := e.store.UpsertReview(ctx, review); err != nil {
+		return nil, fail(fmt.Errorf("reviewer teardown handle: %w", err))
+	}
+	return release, nil
+}
+
 // Cancel interrupts the live reviewer pane for a worker and marks running
 // review runs as cancelled so they no longer block a fresh trigger.
 func (e *Engine) Cancel(ctx stdctx.Context, workerID domain.SessionID) (CancelResult, error) {

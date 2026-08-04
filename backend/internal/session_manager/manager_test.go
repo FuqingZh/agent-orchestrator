@@ -189,6 +189,20 @@ type fakePreviewLifecycle struct {
 	err     error
 }
 
+type fakeReviewerLifecycle struct {
+	began []domain.SessionID
+	ended []domain.SessionID
+	err   error
+}
+
+func (f *fakeReviewerLifecycle) BeginSessionTeardown(_ context.Context, id domain.SessionID) (func(), error) {
+	f.began = append(f.began, id)
+	if f.err != nil {
+		return nil, f.err
+	}
+	return func() { f.ended = append(f.ended, id) }, nil
+}
+
 type fakeBrowserLifecycle struct {
 	destroyed []domain.SessionID
 	err       error
@@ -1824,8 +1838,10 @@ func TestSpawn_WorkspaceProjectRollsBackWhenWorktreeRowsFail(t *testing.T) {
 func TestKill_TearsDownRuntimeAndWorkspace(t *testing.T) {
 	m, st, rt, ws := newManager()
 	preview := &fakePreviewLifecycle{}
+	reviewer := &fakeReviewerLifecycle{}
 	browser := &fakeBrowserLifecycle{}
 	m.preview = preview
+	m.reviewer = reviewer
 	m.browser = browser
 	dataDir := t.TempDir()
 	m.dataDir = dataDir
@@ -1842,6 +1858,9 @@ func TestKill_TearsDownRuntimeAndWorkspace(t *testing.T) {
 	}
 	if !reflect.DeepEqual(preview.stopped, []domain.SessionID{"mer-1"}) {
 		t.Fatalf("preview stops = %v, want [mer-1]", preview.stopped)
+	}
+	if !reflect.DeepEqual(reviewer.began, []domain.SessionID{"mer-1"}) || !reflect.DeepEqual(reviewer.ended, []domain.SessionID{"mer-1"}) {
+		t.Fatalf("reviewer teardown began=%v ended=%v, want [mer-1] for both", reviewer.began, reviewer.ended)
 	}
 	if !reflect.DeepEqual(browser.destroyed, []domain.SessionID{"mer-1"}) {
 		t.Fatalf("browser destroys = %v, want [mer-1]", browser.destroyed)
@@ -2153,6 +2172,26 @@ func TestKill_RuntimeDestroyFailureLeavesSessionActive(t *testing.T) {
 	}
 }
 
+func TestKill_ReviewerTeardownFailureLeavesSessionActive(t *testing.T) {
+	m, st, rt, ws := newManager()
+	m.reviewer = &fakeReviewerLifecycle{err: errors.New("reviewer runtime still alive")}
+	st.sessions["mer-1"] = mkLive("mer-1")
+
+	freed, err := m.Kill(ctx, "mer-1")
+	if err == nil || !strings.Contains(err.Error(), "reviewer") {
+		t.Fatalf("freed=%v err=%v, want reviewer teardown error", freed, err)
+	}
+	if freed {
+		t.Fatal("workspace must not be reported freed when reviewer teardown fails")
+	}
+	if rt.destroyed != 0 || ws.destroyed != 0 {
+		t.Fatalf("worker teardown continued: runtime=%d workspace=%d", rt.destroyed, ws.destroyed)
+	}
+	if st.sessions["mer-1"].IsTerminated {
+		t.Fatal("session must remain active when reviewer teardown fails")
+	}
+}
+
 func TestRestore_ReopensTerminal(t *testing.T) {
 	m, st, rt, _ := newManager()
 	seedTerminal(st, "mer-1", domain.SessionMetadata{WorkspacePath: "/ws/mer-1", Branch: "b", AgentSessionID: "agent-x"})
@@ -2285,6 +2324,8 @@ func TestRestore_RefusesLiveSession(t *testing.T) {
 }
 func TestCleanup_ReclaimsTerminalWorkspaces(t *testing.T) {
 	m, st, _, ws := newManager()
+	reviewer := &fakeReviewerLifecycle{}
+	m.reviewer = reviewer
 	seedTerminal(st, "mer-1", domain.SessionMetadata{WorkspacePath: "/ws/mer-1"})
 	st.sessions["mer-2"] = mkLive("mer-2")
 	res, err := m.Cleanup(ctx, "mer")
@@ -2299,6 +2340,29 @@ func TestCleanup_ReclaimsTerminalWorkspaces(t *testing.T) {
 	}
 	if ws.destroyed != 1 {
 		t.Fatal("live workspace must not be destroyed")
+	}
+	if !reflect.DeepEqual(reviewer.began, []domain.SessionID{"mer-1"}) || !reflect.DeepEqual(reviewer.ended, []domain.SessionID{"mer-1"}) {
+		t.Fatalf("reviewer teardown began=%v ended=%v, want terminal session only", reviewer.began, reviewer.ended)
+	}
+}
+
+func TestCleanup_ReviewerTeardownFailureIsRetryable(t *testing.T) {
+	m, st, _, ws := newManager()
+	m.reviewer = &fakeReviewerLifecycle{err: errors.New("reviewer runtime still alive")}
+	seedTerminal(st, "mer-1", domain.SessionMetadata{WorkspacePath: "/ws/mer-1"})
+
+	res, err := m.Cleanup(ctx, "mer")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(res.Cleaned) != 0 {
+		t.Fatalf("cleaned = %v, want none", res.Cleaned)
+	}
+	if len(res.Skipped) != 1 || res.Skipped[0].SessionID != "mer-1" || res.Skipped[0].Reason != "reviewer teardown failed" {
+		t.Fatalf("skipped = %+v, want retryable reviewer teardown failure", res.Skipped)
+	}
+	if ws.destroyed != 0 {
+		t.Fatal("workspace must not be destroyed while reviewer teardown is unconfirmed")
 	}
 }
 
@@ -4352,6 +4416,8 @@ func newLifecycleManager() (*Manager, *fakeStore, *fakeRuntime, *fakeWorkspace) 
 // UpsertSessionWorktree (writing preserved_ref) BEFORE ForceDestroy.
 func TestSaveAndTeardownAll_CaptureOrderAndMarker(t *testing.T) {
 	m, st, _, ws := newLifecycleManager()
+	reviewer := &fakeReviewerLifecycle{}
+	m.reviewer = reviewer
 
 	// Wire a shared ordered call log so we can assert cross-fake ordering:
 	// both fakeStore and fakeWorkspace append to the same slice.
@@ -4371,6 +4437,9 @@ func TestSaveAndTeardownAll_CaptureOrderAndMarker(t *testing.T) {
 
 	if err := m.SaveAndTeardownAll(ctx); err != nil {
 		t.Fatalf("SaveAndTeardownAll err = %v", err)
+	}
+	if !reflect.DeepEqual(reviewer.began, []domain.SessionID{"mer-1"}) || !reflect.DeepEqual(reviewer.ended, []domain.SessionID{"mer-1"}) {
+		t.Fatalf("reviewer teardown began=%v ended=%v, want [mer-1] for both", reviewer.began, reviewer.ended)
 	}
 
 	// Stash must come before ForceDestroy in the call log.
@@ -5956,6 +6025,8 @@ func TestReconcileReap_TerminatedButAliveTmuxDestroyed(t *testing.T) {
 	lcm := &fakeLCM{store: st}
 	lookPath := func(string) (string, error) { return "/bin/true", nil }
 	m := New(Deps{Runtime: rt, Agents: fakeAgents{}, Workspace: ws, Store: st, Messenger: &fakeMessenger{}, Lifecycle: lcm, LookPath: lookPath})
+	reviewer := &fakeReviewerLifecycle{}
+	m.reviewer = reviewer
 
 	rec := domain.SessionRecord{
 		ID: "t1", ProjectID: "p1", IsTerminated: true,
@@ -5967,6 +6038,9 @@ func TestReconcileReap_TerminatedButAliveTmuxDestroyed(t *testing.T) {
 	}
 	if len(rt.destroyedIDs) != 1 || rt.destroyedIDs[0] != "t1" {
 		t.Fatalf("destroyedIDs = %v, want [t1]", rt.destroyedIDs)
+	}
+	if !reflect.DeepEqual(reviewer.began, []domain.SessionID{"t1"}) || !reflect.DeepEqual(reviewer.ended, []domain.SessionID{"t1"}) {
+		t.Fatalf("reviewer teardown began=%v ended=%v, want [t1] for both", reviewer.began, reviewer.ended)
 	}
 }
 

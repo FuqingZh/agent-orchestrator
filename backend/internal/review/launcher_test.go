@@ -287,6 +287,20 @@ func TestLauncherAlive(t *testing.T) {
 	}
 }
 
+func TestLauncherDestroyPermanentlyRemovesReviewerPane(t *testing.T) {
+	rt := &fakeRuntime{}
+	l := NewLauncher(fakeReviewerResolver{ok: true}, rt, t.TempDir())
+	if err := l.Destroy(context.Background(), "review-mer-1"); err != nil {
+		t.Fatalf("Destroy: %v", err)
+	}
+	if rt.destroyed != "review-mer-1" {
+		t.Fatalf("destroyed handle = %q, want review-mer-1", rt.destroyed)
+	}
+	if err := l.Destroy(context.Background(), ""); err != nil {
+		t.Fatalf("Destroy empty handle: %v", err)
+	}
+}
+
 func TestLauncherCancelUsesReviewerCancelMode(t *testing.T) {
 	reviewer := &fakeCancellableReviewer{interrupts: 2}
 	rt := &fakeRuntime{}

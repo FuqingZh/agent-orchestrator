@@ -202,6 +202,7 @@ type Manager struct {
 	messenger           *sessionguard.Guard
 	lcm                 lifecycleRecorder
 	preview             PreviewLifecycle
+	reviewer            ReviewerLifecycle
 	browser             BrowserLifecycle
 	browserCapabilities BrowserCapabilityIssuer
 	dataDir             string
@@ -259,10 +260,24 @@ func (m *Manager) beginShellTerminalTeardown(ctx context.Context, id domain.Sess
 	return closer.BeginSessionTeardown(ctx, id)
 }
 
+func (m *Manager) beginReviewerTeardown(ctx context.Context, id domain.SessionID) (release func(), err error) {
+	if m.reviewer == nil {
+		return nil, nil
+	}
+	return m.reviewer.BeginSessionTeardown(ctx, id)
+}
+
 // PreviewLifecycle is the narrow teardown hook consumed by Session Manager.
 // Keeping it here follows the consumer-owned interface boundary.
 type PreviewLifecycle interface {
 	StopSession(ctx context.Context, id domain.SessionID) error
+}
+
+// ReviewerLifecycle is the narrow teardown gate consumed by Session Manager.
+// The returned release function keeps review triggering serialized until the
+// worker teardown has recorded its terminal state.
+type ReviewerLifecycle interface {
+	BeginSessionTeardown(ctx context.Context, id domain.SessionID) (release func(), err error)
 }
 
 // BrowserLifecycle is the narrow Electron-target teardown hook consumed by
@@ -310,6 +325,7 @@ type Deps struct {
 	Messenger           ports.AgentMessenger
 	Lifecycle           lifecycleRecorder
 	Preview             PreviewLifecycle
+	Reviewer            ReviewerLifecycle
 	Browser             BrowserLifecycle
 	BrowserCapabilities BrowserCapabilityIssuer
 	// DataDir is exported to spawned agents as AO_DATA_DIR so their hook
@@ -341,6 +357,7 @@ func New(d Deps) *Manager {
 		store:               d.Store,
 		lcm:                 d.Lifecycle,
 		preview:             d.Preview,
+		reviewer:            d.Reviewer,
 		browser:             d.Browser,
 		browserCapabilities: d.BrowserCapabilities,
 		dataDir:             d.DataDir,
@@ -895,6 +912,13 @@ func (m *Manager) Kill(ctx context.Context, id domain.SessionID) (bool, error) {
 	if !ok {
 		return false, nil // already gone: benign race
 	}
+	reviewerRelease, err := m.beginReviewerTeardown(ctx, id)
+	if err != nil {
+		return false, fmt.Errorf("kill %s: reviewer: %w", id, err)
+	}
+	if reviewerRelease != nil {
+		defer reviewerRelease()
+	}
 	m.stopPreviewBestEffort(ctx, id)
 	m.destroyBrowserBestEffort(ctx, id)
 	handle := runtimeHandle(rec.Metadata)
@@ -1391,6 +1415,14 @@ func (m *Manager) SaveAndTeardownAll(ctx context.Context) error {
 // ForceDestroy; if either capture or the DB write fails, ForceDestroy is
 // not called.
 func (m *Manager) saveAndTeardownOne(ctx context.Context, rec domain.SessionRecord, destroyRuntime bool) error {
+	reviewerRelease, reviewerErr := m.beginReviewerTeardown(ctx, rec.ID)
+	if reviewerErr != nil {
+		return fmt.Errorf("save %s: reviewer: %w", rec.ID, reviewerErr)
+	}
+	if reviewerRelease != nil {
+		defer reviewerRelease()
+	}
+
 	// Gate shut this session's scoped shell terminals before either branch
 	// below force-removes its worktree. Both SaveAndTeardownAll and
 	// reconcileLive only reach here for a session with a real workspace, so
@@ -1504,6 +1536,13 @@ func (m *Manager) reconcileLive(ctx context.Context, rec domain.SessionRecord) e
 // to kill the runtime (e.g. ForceDestroy/Destroy errored after MarkTerminated).
 // Destroy is idempotent, so an already-gone session is a no-op.
 func (m *Manager) reconcileReap(ctx context.Context, rec domain.SessionRecord) error {
+	reviewerRelease, reviewerErr := m.beginReviewerTeardown(ctx, rec.ID)
+	if reviewerErr != nil {
+		return fmt.Errorf("reconcile reap %s: reviewer: %w", rec.ID, reviewerErr)
+	}
+	if reviewerRelease != nil {
+		defer reviewerRelease()
+	}
 	handle := runtimeHandle(rec.Metadata)
 	if handle.ID == "" {
 		return nil
@@ -2215,6 +2254,15 @@ func (m *Manager) Cleanup(ctx context.Context, project domain.ProjectID) (Cleanu
 	for _, rec := range recs {
 		if !rec.IsTerminated {
 			continue
+		}
+		reviewerRelease, reviewerErr := m.beginReviewerTeardown(ctx, rec.ID)
+		if reviewerErr != nil {
+			m.logger.Warn("cleanup: reviewer teardown failed", "sessionID", rec.ID, "error", reviewerErr)
+			result.Skipped = append(result.Skipped, CleanupSkip{SessionID: rec.ID, Reason: "reviewer teardown failed"})
+			continue
+		}
+		if reviewerRelease != nil {
+			reviewerRelease()
 		}
 		ws := workspaceInfo(rec)
 		if ws.Path == "" {
