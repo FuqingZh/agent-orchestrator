@@ -1,6 +1,6 @@
 # AO upstream main snapshot synchronization
 
-Status: completed — awaiting pull-request delivery
+Status: completed — merged as fork PR #18
 
 Date: 2026-08-04
 
@@ -90,5 +90,5 @@ head has passed CI and review. Do not deploy the result as part of this PR.
 - [x] Map colliding migrations 0039 through 0041 to fork 0042 through 0044.
 - [x] Pass focused lifecycle, API, and migration tests.
 - [x] Complete the canonical gate and isolated CLI lifecycle canary.
-- [ ] Deliver and merge the synchronization PR.
-- [ ] Rebase the worker-containment plan PR on the synchronized fork baseline.
+- [x] Deliver and merge the synchronization PR.
+- [x] Rebase the worker-containment plan PR on the synchronized fork baseline.
