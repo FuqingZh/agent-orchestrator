@@ -1,329 +1,235 @@
-# Linux Worker Process Containment
+# Minimal `setsid`-safe tmux containment
 
 **Date:** 2026-08-04
 
-**Status:** Proposed — implementation awaits maintainer direction on #2523
+**Status:** Ready for implementation
 
-**Delivery slice:** PR A
+**Delivery slice:** upstream PR A
 
 **Tracks:** [Untrivial-ai/agent-orchestrator#2523](https://github.com/Untrivial-ai/agent-orchestrator/issues/2523)
+
 **Evidence baseline:** upstream `main` at `5f3e6bcd5a47bb7312f80cfc3966464a8f948cda`
 
-This document is an implementation plan, not current architecture. The
-containment backend described below is not implemented on the evidence
-baseline.
+This is an implementation plan, not current architecture. The evidence
+baseline still reaps tmux descendants by the pane's POSIX session ID and does
+not contain descendants that call `setsid`.
 
-The refreshed baseline adds best-effort Docker container reaping on terminal
-state. It does not add systemd/cgroup process containment, scope-empty proof,
-or a durable cleanup finalizer, so the core PR A topology remains unchanged.
+## Repository contract audit
 
-## Goal
+The plan was checked against current upstream `CONTRIBUTING.md`, `AGENTS.md`,
+`docs/development.md`, the pull-request template, and the path-filtered GitHub
+workflows.
 
-When the operator explicitly enables the Linux systemd containment backend,
-make worker teardown own every process launched for a tmux runtime, including
-descendants that call `setsid`, and make synchronous
-`Create`/`Restart`/`Destroy` paths fail closed whenever AO cannot prove that
-the worker's operating-system containment boundary is empty. The unconfigured
-compatibility backend retains its current weaker SID semantics in this slice.
+The implementation must:
 
-## Contribution gate
+- branch from a freshly fetched upstream `main` and keep one issue in one PR;
+- remain surgical, use the existing tmux runtime boundary, and avoid one-off
+  forwarding abstractions;
+- use a conventional `fix:` commit and fill the PR template's What, Why, How,
+  Testing, and intentional-omissions sections;
+- use Go 1.25.7 or newer, Node.js 20.19.0 or newer, and npm 10 or newer for the
+  documented local gate; and
+- pass the backend Go, API-drift, native CLI E2E, Docker fresh-install, and
+  gitleaks workflows triggered by a `backend/**` change.
 
-`CONTRIBUTING.md` requires non-trivial work to be discussed and accepted before
-implementation. A design question has been posted on #2523, but no maintainer
-thumbs-up or assignment has been recorded yet.
+No repository development or test rule requires broadening this fix into
+durable cleanup, Docker cleanup, database, API, or frontend behavior.
 
-Do not begin implementation or open the upstream code pull request until a
-maintainer confirms the proposed scope and ownership on #2523 or Discord. When
-that happens, create the implementation branch from a freshly fetched upstream
-`main`; do not use this fork's documentation branch as a code baseline.
+## Outcome and claim boundary
 
-## Problem and current evidence
+When `AO_PROCESS_CONTAINMENT=systemd` is explicitly selected on Linux, every
+process launched by a tmux worker belongs to one deterministic systemd user
+scope. `Restart` and `Destroy` release that scope, so a descendant cannot
+escape cleanup by changing its POSIX session with `setsid`.
 
-On the evidence baseline, `tmux.Runtime.Destroy`:
+The PR is complete when it proves the normal successful
+`Create -> Restart -> Destroy` lifecycle. It does not claim crash-restart or
+durable retry closure; those remain PR B.
 
-1. records each tmux pane PID;
-2. destroys the tmux session;
-3. runs `pkill -s <pane-pid>` and polls with `pgrep -s <pane-pid>`; and
-4. returns no structured release result from the SID reaper.
+Unset configuration preserves the current tmux SID-reaper behavior. An
+explicitly requested but unavailable systemd backend fails before creating the
+tmux session rather than silently falling back.
 
-tmux initially launches a pane with `pane PID == SID`, but a descendant that
-calls `setsid` receives a new SID. It is no longer selected by the original
-`pkill -s` call and can survive after the tmux session disappears. Process-tree
-walks and pidfds can safely address discovered PIDs, but they do not provide a
-stable ownership boundary after reparenting or an already-completed `setsid`.
+## Non-goals
 
-The current unit tests cover the SID reaper's TERM/wait/KILL sequence. The
-current tmux integration tests cover ordinary create, destroy, terminal input,
-and restart, but do not create a `setsid` descendant. GitHub-hosted CI also does
-not guarantee a usable user systemd manager, so repository CI alone cannot
-prove this fix against a real scope.
+PR A does not change:
 
-Upstream's new Docker reaper is an independent, label-based cleanup leg. It is
-invoked by `MarkTerminated` after the session manager's synchronous runtime and
-workspace path, logs failures, and deliberately does not make termination
-fail. It cannot prove that host processes exited and must not satisfy or mask
-the process-containment postcondition below.
+- Docker or other container reaping;
+- cleanup facts, generations, SQLite, daemon-restart reconciliation, or retry;
+- workspace disposition, Linear, GitHub, Dashboard, HTTP, OpenAPI, or frontend
+  behavior;
+- macOS's existing tmux compatibility path or Windows ConPTY behavior; or
+- resource ceilings and shared-filesystem search policy.
 
-## Scoped-backend outcome contract
+No Docker interaction test belongs in this PR. If implementation evidence
+forces a lifecycle call-order change outside the tmux adapter, stop and
+re-scope rather than silently absorbing it.
 
-The following guarantees apply when `AO_PROCESS_CONTAINMENT=systemd` is
-selected. They do not describe the unconfigured SID compatibility backend.
+## Minimal design
 
-- A successful scoped `Create` proves that the pane command belongs to the
-  deterministic scope assigned to the runtime handle.
-- `Destroy` returns `nil` only after the tmux session is absent and the assigned
-  scope is proven empty or fully unloaded.
-- A release that is populated, unreadable, or otherwise unprovable returns a
-  typed retryable error. It must not be converted into success because tmux is
-  absent.
-- `Restart` never overlaps old and new generations. It releases and verifies
-  the old scope before starting the replacement command.
-- A caller must not remove a workspace, delete the last durable ownership
-  record, or start a replacement generation after a release-pending error.
-- If `Create` has produced a tmux session or scope and its rollback cannot prove
-  release, it returns the deterministic non-empty runtime handle together with
-  the release-pending error. The caller durably records that handle before
-  returning and preserves the workspace; it must not treat `handle + error` as
-  equivalent to “nothing was created.”
-- Explicitly requested systemd containment fails closed when its binaries,
-  user manager, cgroup hierarchy, or required probes are unavailable.
-- The existing non-systemd behavior remains compatible unless the operator
-  explicitly enables the systemd backend.
+### 1. Explicit opt-in
 
-## Architectural decisions
-
-### 1. Opt-in Linux backend
-
-Add an explicit daemon configuration value with an initial environment surface:
+Add one validated configuration value:
 
 ```text
 AO_PROCESS_CONTAINMENT=systemd
 ```
 
-Unset means the current platform behavior. `systemd` is accepted only on Linux
-and requires a usable user manager. Unknown values and an explicitly requested
-but unavailable backend are startup/configuration errors; they do not silently
-fall back to SID matching.
+Unset selects the current backend. `systemd` is Linux-only and requires
+`systemd-run --user` plus a usable user manager. Unknown values and explicit
+unavailability are configuration errors.
 
-Do not make systemd the universal default in this slice. Default selection,
-Desktop settings, and broader rollout require representative platform evidence
-after the opt-in implementation has landed.
+Do not add a Desktop setting, project-level setting, API field, or automatic
+backend selection in this PR.
 
-### 2. Private tmux containment module
+### 2. Put the pane command in one exact scope
 
-Keep the implementation inside the tmux adapter behind a small private
-interface used by `Create`, `Restart`, and `Destroy`. A representative shape is:
+Wrap the command executed inside the tmux pane, not the transient
+`tmux new-session` client. The persistent tmux server otherwise launches the
+pane outside the desired boundary.
 
-```go
-type processContainment interface {
-	Prepare(ctx context.Context, handle string) error
-	WrapLaunch(handle, shell, launch string) (string, error)
-	Verify(ctx context.Context, handle string, panePID int) error
-	Release(ctx context.Context, handle string, grace time.Duration) error
-}
+Use an exact unit name derived from the already-sanitized runtime handle, for
+example:
+
+```text
+ao-session-<handle>.scope
 ```
 
-The exact method names may follow nearby code, but the module must own scope
-naming, launch wrapping, membership verification, TERM/KILL delivery, and empty
-proof. Callers must not duplicate systemctl or cgroup parsing.
-
-Use a deterministic scope name derived from the already-sanitized tmux runtime
-handle, for example `ao-session-<handle>.scope`. Determinism allows `Destroy`
-to find the scope after tmux has disappeared without changing the persisted
-runtime handle or adding a database migration.
-
-### 3. Put the pane command inside the scope
-
-Wrap the command executed inside the pane, not the `tmux new-session` client.
-The persistent tmux server creates pane processes from its own cgroup, so
-wrapping only the client does not contain the worker.
-
-The scoped command is conceptually:
+The launch is conceptually:
 
 ```bash
 exec systemd-run --user --scope --collect \
   --unit=ao-session-<handle>.scope \
-  -- <shell> -c '<existing launch command>'
+  --property=KillMode=control-group \
+  --property=TimeoutStopSec=<reap-grace> \
+  --property=SendSIGKILL=yes \
+  -- <existing shell and launch command>
 ```
 
-Preserve the existing launch command's environment, working-directory guard,
-agent supervisor, and keep-alive interactive shell. Before `Create` returns,
-verify both tmux liveness and pane membership in the expected scope.
+Preserve the existing environment filtering, workspace `cd` guard, supervisor,
+interactive keep-alive shell, and terminal input behavior. Do not build a
+second launch-command pipeline.
 
-In scoped mode, enable and verify tmux's window-level `remain-on-exit` option.
-Without it, releasing the old scope during `Restart` can remove the last pane
-and therefore the tmux session before `respawn-pane` has a target.
+Keep the implementation private to the tmux adapter. A small private helper is
+allowed when it owns unit naming, command wrapping, status interpretation, and
+release; do not add a new public port unless a real caller needs it.
 
-### 4. Release by scope, then prove emptiness
+### 3. Let systemd own TERM, grace, KILL, and empty proof
 
-`Destroy` must attempt containment cleanup even when tmux reports that the
-session is already absent:
+Do not add bespoke cgroup v1/v2 filesystem walkers in PR A. Configure the
+scope's control-group kill policy and stop timeout, call `systemctl --user stop`
+for the exact unit, and then read back the unit state.
 
-```text
-tmux kill-session
-→ scope TERM
-→ bounded poll through the grace interval
-→ scope KILL when still populated
-→ final empty/unloaded proof
-```
+Release succeeds only when the unit is authoritatively `inactive/dead` or
+unloaded (`not-found`). `active`, `activating`, `deactivating`, malformed,
+unreadable, timed-out, or otherwise unknown state is an error. A missing unit
+is idempotent success.
 
-For cgroup v2, read `cgroup.events` and require `populated 0`. For cgroup v1,
-resolve the systemd hierarchy and recursively require empty `tasks` or
-`cgroup.procs` files. Missing or malformed evidence is unknown, not empty.
+The real Linux canary is the acceptance oracle for whether systemd unit state
+is sufficient on supported hosts. Add direct cgroup probing only if that
+evidence disproves the simpler contract.
 
-The scope release implementation must use exact unit names and must not search
-or signal processes globally by command name, environment value, repository
-path, or user ID.
+### 4. Integrate only `Create`, `Restart`, and `Destroy`
 
-Expose a stable sentinel such as `ports.ErrRuntimeReleasePending` for callers
-that must preserve state. Keep detailed unit, handle, and probe causes in the
-wrapped error for diagnostics.
+- `Create` wraps the actual pane command and verifies that the expected scope
+  became active before reporting success.
+- In scoped mode, enable tmux `remain-on-exit` so stopping the old scope does
+  not remove the pane required by `respawn-pane`.
+- `Restart` releases the old scope first. It must not respawn when release is
+  unsuccessful, and it preserves the existing runtime handle on success.
+- `Destroy` attempts exact-scope release even when the tmux session is already
+  absent, then returns success only after tmux is absent and the scope is
+  released.
+- The unconfigured path continues to use the existing SID reaper without
+  behavioral changes.
 
-### 5. Restart through a retained dead pane
+Use the existing `Destroy` error channel. Current normal Kill and Restart paths
+already stop on runtime-destroy errors, so PR A does not add a public
+`ErrRuntimeReleasePending`, audit unrelated teardown call sites, or implement
+durable retry.
 
-The scoped restart sequence is:
-
-1. verify `remain-on-exit` is enabled;
-2. release the stable old scope and prove it empty;
-3. wait for `--collect` to unload the old unit;
-4. run the existing `respawn-pane -k` path with the newly wrapped command;
-5. verify the new scope membership, tmux liveness, and terminal usability.
-
-If step 2 or 3 fails, leave the dead pane available for diagnosis and retry.
-Do not respawn. A generation-specific unit is not required in this slice and
-would require additional persistent identity and rediscovery rules.
-
-### 6. Preserve state at runtime callers
-
-Audit every synchronous `Runtime.Destroy` call. Apply one rule consistently:
-
-```text
-Destroy == nil   → runtime release is proven; workspace cleanup may continue
-Destroy != nil   → preserve the workspace and ownership facts; do not replace
-```
-
-At minimum, cover:
-
-- spawn and relaunch rollback paths that currently discard cleanup errors;
-- shutdown save-and-teardown paths before `ForceDestroy`;
-- project `Cleanup`, which currently treats runtime teardown as best effort;
-- boot reconciliation when tmux is gone but a deterministic scope may remain;
-- tmux `Create` failure rollback; and
-- shell-terminal teardown, where `IsAlive=false` for tmux must not override a
-  release-pending containment error and delete the terminal record.
-
-`Runtime.Create` already returns `(RuntimeHandle, error)`. Preserve that
-signature, but define its partial-create contract: after a created runtime
-cannot be proven released, return its deterministic handle with
-`ErrRuntimeReleasePending`. The seeded session's existing durable metadata must
-record the handle before the session manager returns the spawn failure. If
-rollback proves both tmux and scope released, returning a zero handle with the
-original create error remains valid. No caller may delete the workspace while
-a non-empty failed-create handle remains unreleased.
-
-Do not broaden `Runtime.IsAlive` to mean both tmux liveness and containment
-release. These are different facts. `Destroy` owns the strong release
-postcondition in this slice.
-
-### 7. Keep container and process release facts separate
-
-Do not fold the label-based Docker reaper into the systemd scope abstraction.
-PR A owns the synchronous host-process invariant required before workspace
-removal. The existing container reaper remains best effort and may run when
-terminal intent is recorded, but its success is not evidence that the scope is
-empty and its failure must not weaken `ErrRuntimeReleasePending`.
-
-Add an ordering test for the explicit Kill path: a release-pending process
-scope preserves the workspace and prevents terminal-state side effects from
-being treated as completed runtime release. A later lifecycle redesign may
-durably sequence both cleanup legs, but that belongs with PR B and requires
-maintainer direction.
-
-## Expected file surface
-
-The final implementation should stay close to this boundary; exact test file
-splits may follow repository conventions.
+## Expected code surface
 
 | Area | Expected files | Responsibility |
 | --- | --- | --- |
-| Configuration | `backend/internal/config/config.go`, tests | parse and validate containment selection |
-| Runtime selection | `backend/internal/adapters/runtime/runtimeselect/`, daemon wiring | pass resolved selection to tmux |
-| Containment | new files under `backend/internal/adapters/runtime/tmux/` | systemd scope and unsupported-platform behavior |
-| tmux lifecycle | `tmux.go`, `commands.go` | wire prepare/wrap/verify/release and `remain-on-exit` |
-| Error contract | `backend/internal/ports/outbound.go` | release-pending sentinel without changing method signatures |
-| Fail-closed callers | session manager, lifecycle persistence, and shell-terminal service | preserve runtime handle, workspace, and durable records on incomplete release |
-| Container interaction | lifecycle manager tests | preserve the existing best-effort reaper while proving it cannot satisfy process release |
-| Tests | adjacent package tests and tmux integration test | state machine, parsers, errors, real process behavior |
+| Configuration | `backend/internal/config/config.go` and tests | parse and validate the opt-in value |
+| Runtime wiring | existing runtime selection/daemon wiring | pass the resolved backend to tmux |
+| systemd scope | focused Linux file plus non-Linux build stub under `backend/internal/adapters/runtime/tmux/` | exact unit wrap, status, release |
+| tmux lifecycle | `tmux.go`, command helpers, adjacent tests | integrate Create, Restart, Destroy, and `remain-on-exit` |
+| Acceptance | tmux integration test | prove changed-SID cleanup and restart behavior on a real user manager |
 
-No frontend, HTTP DTO, OpenAPI, generated TypeScript, SQLite migration, or
-derived display-status change belongs in PR A.
+Expected production changes stay in the backend configuration/wiring and tmux
+adapter. If implementation requires lifecycle manager, storage, API, generated
+types, frontend, or container changes, pause and reassess the PR boundary.
 
-## Task graph
+## Test plan
 
-### A1. Configuration and containment contract
+### Layer 1: hermetic unit tests
 
-- Add and validate the opt-in configuration.
-- Define deterministic unit naming and the release-pending error contract.
-- Add injected command/filesystem seams so unit tests require neither a real
-  daemon nor a real systemd manager.
-- Verify invalid values and explicit-unavailable systemd fail before tmux
-  creation.
+Use injected command results; do not require a real daemon, tmux server, or
+systemd manager.
 
-### A2. Linux systemd implementation
+Cover:
 
-- Implement launch wrapping and membership verification.
-- Implement exact-unit TERM, bounded polling, KILL, and final proof.
-- Support cgroup v2 `cgroup.events` and the cgroup v1 systemd hierarchy.
-- Add fixture tests for populated, empty, nested, malformed, unreadable, and
-  unloaded states.
+- unset, valid `systemd`, unknown, non-Linux, and unavailable-backend config;
+- deterministic and escaped unit naming;
+- launch wrapping with exact systemd properties and safe argument handling;
+- active-scope verification;
+- release success for `inactive/dead` and `not-found`;
+- release failure for command failure, timeout, `active`, `activating`,
+  `deactivating`, malformed, and unreadable state;
+- Destroy releasing the scope when tmux exists and when tmux is already gone;
+- Restart releasing before respawn and refusing respawn after release failure;
+- handle preservation and terminal command behavior after successful restart;
+  and
+- unchanged commands and SID-reaper behavior when containment is unset.
 
-### A3. Create, Restart, and Destroy integration
-
-- Wire the actual pane command through containment.
-- Enable `remain-on-exit` before reporting scoped Create ready.
-- Make Restart release-first and refuse overlap.
-- Make Destroy idempotent only when both tmux and containment are released.
-- Keep the current SID reaper as the unconfigured compatibility path.
-
-### A4. Fail-closed caller audit
-
-- Stop workspace deletion and generation replacement on Destroy errors.
-- Preserve shell-terminal rows on release-pending errors.
-- Join or surface rollback cleanup errors instead of silently discarding them.
-- Persist a non-empty handle returned with a partial-Create cleanup error before
-  returning the spawn failure.
-- Add focused caller tests proving that an unconfirmed runtime keeps its
-  workspace and record, including daemon-restart readback of the failed-Create
-  handle.
-
-### A5. Representative Linux canary
-
-Add an explicitly enabled integration test that starts inside the scope:
-
-- one ordinary background process;
-- one descendant that demonstrably changes SID with `setsid`; and
-- one descendant that ignores TERM.
-
-Start an unrelated process outside the scope as a negative control. After
-Destroy, require all owned PIDs gone, the negative control alive, tmux gone,
-the scope empty or unloaded, the same handle reusable, and terminal input
-working after Create and Restart.
-
-When the explicit canary flag is set, missing tmux, user systemd, or cgroup
-permissions is a failure, not a skip. Default hermetic unit tests may skip the
-real-host canary.
-
-## CI/CD acceptance
-
-Run focused feedback first:
+Run the narrow feedback loop first:
 
 ```bash
 cd backend
-go test ./internal/adapters/runtime/tmux
-go test ./internal/session_manager ./internal/service/shellterm ./internal/daemon
+go test ./internal/config ./internal/adapters/runtime/runtimeselect
+go test ./internal/adapters/runtime/tmux \
+  -run 'Systemd|Containment|Destroy|Restart' -count=1
 ```
 
-Then mirror the backend CI gate from the repository root:
+### Layer 2: explicit real-Linux canary
+
+Add one opt-in integration test that uses an isolated tmux server and an exact
+transient user scope. Default CI/unit runs may skip it; when the canary flag is
+explicitly set, missing tmux, user systemd, or permissions is a failure.
+
+```bash
+AO_TEST_SYSTEMD_CONTAINMENT=1 \
+go test ./internal/adapters/runtime/tmux \
+  -run TestRuntimeIntegrationSystemdContainment -count=1 -v
+```
+
+The canary must:
+
+1. launch a worker whose child calls `setsid` and ignores TERM;
+2. prove before teardown that the child's SID differs from the pane SID and
+   that the child belongs to the expected scope;
+3. launch an unrelated process outside the scope as a negative control;
+4. call `Destroy` and prove the escaped process identity is gone, tmux is gone,
+   the scope is inactive/dead or unloaded, and the negative control is alive;
+5. repeat through `Restart`, proving the old process identity is gone before
+   the new command starts, the runtime handle is unchanged, and terminal input
+   still works; and
+6. clean the negative control, tmux server, and transient unit on every exit.
+
+Record PID, SID, `/proc/<pid>/stat` start time, expected unit, unit state, and
+negative-control evidence. PID alone is not sufficient because it can be
+reused.
+
+This repository's GitHub-hosted runners do not guarantee a usable user systemd
+manager, so the explicit canary is host acceptance evidence rather than a new
+required default-CI job.
+
+### Layer 3: repository gate
+
+Use bounded concurrency on constrained hosts, but run the same logical gate as
+the repository:
 
 ```bash
 cd backend
@@ -331,43 +237,52 @@ test -z "$(gofmt -l .)"
 go build ./...
 go vet ./...
 go test -race ./...
-go run github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.12.2 run --path-mode=abs
+go run github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.12.2 \
+  run --path-mode=abs
 cd ..
 npm ci
 npm run api
-git diff --exit-code -- frontend/src/api/schema.ts
+git diff --exit-code -- \
+  backend/internal/httpd/apispec/openapi.yaml \
+  frontend/src/api/schema.ts
 ```
 
-The upstream PR also exercises the native CLI E2E matrix on Ubuntu, macOS, and
-Windows, the Docker fresh-install check, API drift, and gitleaks through the
-existing path-filtered workflows. Those checks do not substitute for the real
-systemd canary because their environments do not guarantee tmux plus a running
-user manager.
+Also run the tagged CLI suite locally when practical:
 
-Record the canary environment, exact command, PID/SID/cgroup evidence, and
-final empty proof in the PR's Testing section.
+```bash
+cd backend
+go test -tags e2e -v ./internal/cli/...
+```
 
-## Compatibility and rollback
-
-- Unset configuration preserves the current runtime backend.
-- Darwin remains on the current fast unsupported-matcher fallback.
-- Windows ConPTY is untouched.
-- Removing the configuration value and reverting the contained runtime commits
-  restores prior behavior without a data migration.
-- Do not advertise systemd containment as current architecture until the code,
-  fake tests, CI, and real canary have all passed.
+The pull request must pass the exact-head Go workflow, native CLI E2E on
+Ubuntu/macOS/Windows, Docker fresh-install, API drift, and gitleaks. Full
+frontend Vitest, Playwright, mobile, release, and packaging gates are outside
+the local scope because the PR does not touch those surfaces.
 
 ## Delivery
 
-- Use one focused upstream PR from current upstream `main` with a conventional
-  `fix:` commit.
-- Use `Refs #2523`, not `Fixes #2523`; durable daemon-restart cleanup remains PR
-  B and #2523 also discusses resource ceilings outside this slice.
-- Fill the repository PR template's What, Why, How, Testing, and intentional
-  omissions sections.
-- Maintainers control review and merge. Do not request automatic merge on the
+- Start the implementation from freshly fetched upstream `main`, not the fork
+  documentation branch.
+- Keep one focused `fix:` commit or a small reviewable series with one logical
+  contract.
+- Link #2523 with `Refs #2523`; do not claim durable cleanup or resource-limit
+  closure.
+- In the PR body, explicitly omit Docker cleanup, durable retry, database/API,
+  frontend, and automatic/default systemd rollout.
+- Maintainers own review and merge; do not request automatic merge on the
   upstream repository.
 
-PR A is complete only when the synchronous systemd-scoped, known-handle
-lifecycle satisfies the outcome contract and the real Linux canary proves that
-a changed-SID descendant is reaped without killing the negative control.
+## Acceptance
+
+PR A is complete only when all of the following are true:
+
+1. a descendant with `SID != pane SID` and ignored TERM is removed by scoped
+   Destroy;
+2. an unrelated process outside the exact scope survives;
+3. Restart cannot overlap old and new scope occupants and preserves terminal
+   usability;
+4. unknown or incomplete scope release returns an error rather than success;
+5. the unset backend retains current behavior on Linux, macOS, and Windows;
+   and
+6. the focused tests, real-host canary, complete backend gate, and exact-head
+   GitHub checks all pass.

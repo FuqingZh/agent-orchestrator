@@ -75,7 +75,9 @@ PR B consumes the following accepted contracts from PR A:
 - a deterministic containment identity recoverable from persisted session and
   runtime identity;
 - `Destroy == nil` means tmux is absent and containment is proven empty;
-- a stable typed release-pending error for populated or unknown containment;
+- `Destroy != nil` preserves the distinction between proven release and an
+  unknown or incomplete release; PR B may add internal retry classification
+  when it owns durable retry;
 - no generation replacement while the preceding scope is populated; and
 - caller behavior that already preserves workspaces synchronously on release
   failure.
@@ -159,11 +161,11 @@ Use named retry constants with tests for:
 - maximum attempts; and
 - terminal transition after exhaustion.
 
-A release-pending or transient probe error records attempt time, failure code,
-and `NextAttemptAt`. It remains retryable. A dirty workspace records
-`preserved_dirty` and pauses automatic retry until explicit user action. A
-non-dirty cleanup that reaches the retry cap records `failed` and also requires
-explicit retry.
+A containment-release error that PR B classifies as transient records attempt
+time, failure code, and `NextAttemptAt`. It remains retryable. A dirty workspace
+records `preserved_dirty` and pauses automatic retry until explicit user
+action. A non-dirty cleanup that reaches the retry cap records `failed` and
+also requires explicit retry.
 
 Do not apply retry to authentication, permission, invalid configuration, stale
 generation, or cancellation failures as if they were transient.
