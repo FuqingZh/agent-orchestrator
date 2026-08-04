@@ -2,7 +2,9 @@
 
 **Date:** 2026-08-04
 
-**Status:** Deferred dependency — not ready to implement
+**Status:** Deferred dependency — PR A is submitted upstream but not maintainer-accepted
+
+PR B remains closed to implementation until [PR #3550](https://github.com/Untrivial-ai/agent-orchestrator/pull/3550) is accepted and maintainers resolve ownership and coordination with [#2931](https://github.com/Untrivial-ai/agent-orchestrator/pull/2931). The fork CI and host-canary evidence for PR A do not satisfy that contribution gate.
 
 **Delivery slice:** PR B
 

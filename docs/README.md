@@ -24,11 +24,12 @@ Start with [architecture.md](architecture.md) for the current backend model and
 | [adr/0003-stable-upstream-baseline-sync.md](adr/0003-stable-upstream-baseline-sync.md) | Why the fork synchronizes from pinned stable releases and preserves a minimal downstream delta. |
 | [adr/0004-explicit-upstream-main-snapshots.md](adr/0004-explicit-upstream-main-snapshots.md) | Why an explicitly authorized development baseline may pin and merge an upstream `main` snapshot. |
 | [plans/2026-08-03-v0.11.2-baseline-sync.md](plans/2026-08-03-v0.11.2-baseline-sync.md) | Completed historical plan for synchronizing the fork to upstream v0.11.2. |
-| [plans/2026-08-04-upstream-main-sync.md](plans/2026-08-04-upstream-main-sync.md) | Active plan for synchronizing the fork to upstream `main` at `5f3e6bcd`. |
-| [plans/2026-08-04-worker-process-containment.md](plans/2026-08-04-worker-process-containment.md) | Ready PR A plan for the minimal opt-in systemd scope slice that makes tmux Restart/Destroy `setsid`-safe. |
+| [plans/2026-08-04-upstream-main-sync.md](plans/2026-08-04-upstream-main-sync.md) | Completed plan for synchronizing the fork to upstream `main` at `5f3e6bcd`. |
+| [plans/2026-08-04-worker-process-containment.md](plans/2026-08-04-worker-process-containment.md) | Submitted upstream PR #3550 for the minimal opt-in systemd scope slice that makes tmux Restart/Destroy `setsid`-safe; awaiting maintainer review. |
 | [plans/2026-08-04-durable-runtime-cleanup.md](plans/2026-08-04-durable-runtime-cleanup.md) | Deferred PR B plan for generation-fenced cleanup facts, daemon-restart rediscovery, and bounded retry after PR A. |
 | [v0.11.2-sync-verification.md](v0.11.2-sync-verification.md) | Canonical-gate and isolated-canary evidence for the v0.11.2 fork synchronization. |
 | [upstream-main-sync-verification.md](upstream-main-sync-verification.md) | Merge-specific, canonical-gate, and isolated CLI evidence for the pinned upstream `main` synchronization. |
+| [worker-process-containment-verification.md](worker-process-containment-verification.md) | Exact-head fork CI and host-canary evidence for upstream PR #3550; not upstream acceptance or production deployment. |
 | [downstream-patches.md](downstream-patches.md)       | Retained fork patches, their evidence, and the condition for deleting each one.                                      |
 | [upstream-migration-map.md](upstream-migration-map.md) | Immutable mapping from colliding upstream migration versions to shipped fork versions. |
 

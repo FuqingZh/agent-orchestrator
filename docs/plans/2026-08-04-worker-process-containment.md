@@ -2,7 +2,9 @@
 
 **Date:** 2026-08-04
 
-**Status:** Ready for implementation
+**Status:** Implemented on the fork branch and submitted upstream as [PR #3550](https://github.com/Untrivial-ai/agent-orchestrator/pull/3550); awaiting maintainer review
+
+The submitted head is `bd7baa54e829c3426cdeefe345b8252d1c8ed746` against upstream base `5f3e6bcd5a47bb7312f80cfc3966464a8f948cda`. The exact head passed the fork validation PR [#20](https://github.com/FuqingZh/agent-orchestrator/pull/20): Go build/lint/API-drift, Ubuntu/macOS/Windows CLI E2E, Docker fresh-install, and gitleaks. The PR body records the opt-in Linux host canary as passing; these are contributor/fork evidence, not upstream required checks, maintainer acceptance, or production deployment.
 
 **Delivery slice:** upstream PR A
 
