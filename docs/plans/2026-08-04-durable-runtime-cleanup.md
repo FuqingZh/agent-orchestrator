@@ -9,11 +9,15 @@
 **Depends on:** accepted PR A containment semantics and a maintainer-approved durable-finalizer direction
 
 **Related work:** [#2523](https://github.com/Untrivial-ai/agent-orchestrator/issues/2523), [#2931](https://github.com/Untrivial-ai/agent-orchestrator/pull/2931)
-**Evidence baseline:** upstream `main` at `d8db370327a4d86ca1b431985155e4300ea9d8e4`
+**Evidence baseline:** upstream `main` at `5f3e6bcd5a47bb7312f80cfc3966464a8f948cda`
 
 This document is an implementation plan, not current architecture. Upstream
 `main` contains cleanup persistence substrate but does not yet run the durable
 finalizer described below.
+
+The refreshed baseline adds a best-effort, label-based Docker container reaper
+at `MarkTerminated`. It remains non-durable, logs rather than returns failure,
+and does not change the missing process-containment or finalizer behavior.
 
 ## Goal
 
@@ -59,7 +63,10 @@ The missing behavior is orchestration:
 - daemon boot and termination/restore CDC do not wake durable cleanup work;
 - no bounded backoff loop retries a populated or temporarily unreadable scope;
 - several synchronous paths still ignore `Runtime.Destroy` errors; and
-- the current read model must not infer release merely from tmux disappearance.
+- the current read model must not infer release merely from tmux disappearance;
+  and
+- Docker container reaping is a separate best-effort terminal side effect, not
+  a durable cleanup fact or proof of host-process release.
 
 ## Dependencies produced by PR A
 
@@ -131,6 +138,12 @@ Each successful step is durable before the next destructive step. Re-running
 the same generation is safe. A crash after runtime release but before workspace
 release resumes at the workspace step rather than recreating or re-killing the
 runtime.
+
+The accepted design must explicitly decide where Docker container cleanup
+belongs. Until then, retain the current adapter contract but do not let its
+best-effort result advance `RuntimeReleasedAt`, workspace disposition, or scope
+release. If maintainers want container cleanup made durable, add a distinct
+fact/step rather than overloading the operating-system process-release fact.
 
 All lifecycle entry points that can terminate, restore, replace, clean, or
 reconcile a session must serialize through the same per-session lock. Holding a
@@ -361,7 +374,8 @@ enough to claim durable closure.
   #2931 in the PR body.
 - Use conventional commits and the repository PR template.
 - Call out intentional omissions: UI, doctor output, resource ceilings,
-  containers, and non-systemd containment backends.
+  durable container-cleanup facts, and non-systemd containment backends. The
+  existing best-effort Docker reaper remains compatible and separately owned.
 - Maintainers control review and merge; do not request automatic merge on the
   upstream repository.
 

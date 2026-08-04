@@ -7,11 +7,15 @@
 **Delivery slice:** PR A
 
 **Tracks:** [Untrivial-ai/agent-orchestrator#2523](https://github.com/Untrivial-ai/agent-orchestrator/issues/2523)
-**Evidence baseline:** upstream `main` at `d8db370327a4d86ca1b431985155e4300ea9d8e4`
+**Evidence baseline:** upstream `main` at `5f3e6bcd5a47bb7312f80cfc3966464a8f948cda`
 
 This document is an implementation plan, not current architecture. The
 containment backend described below is not implemented on the evidence
 baseline.
+
+The refreshed baseline adds best-effort Docker container reaping on terminal
+state. It does not add systemd/cgroup process containment, scope-empty proof,
+or a durable cleanup finalizer, so the core PR A topology remains unchanged.
 
 ## Goal
 
@@ -53,6 +57,12 @@ current tmux integration tests cover ordinary create, destroy, terminal input,
 and restart, but do not create a `setsid` descendant. GitHub-hosted CI also does
 not guarantee a usable user systemd manager, so repository CI alone cannot
 prove this fix against a real scope.
+
+Upstream's new Docker reaper is an independent, label-based cleanup leg. It is
+invoked by `MarkTerminated` after the session manager's synchronous runtime and
+workspace path, logs failures, and deliberately does not make termination
+fail. It cannot prove that host processes exited and must not satisfy or mask
+the process-containment postcondition below.
 
 ## Scoped-backend outcome contract
 
@@ -215,6 +225,20 @@ Do not broaden `Runtime.IsAlive` to mean both tmux liveness and containment
 release. These are different facts. `Destroy` owns the strong release
 postcondition in this slice.
 
+### 7. Keep container and process release facts separate
+
+Do not fold the label-based Docker reaper into the systemd scope abstraction.
+PR A owns the synchronous host-process invariant required before workspace
+removal. The existing container reaper remains best effort and may run when
+terminal intent is recorded, but its success is not evidence that the scope is
+empty and its failure must not weaken `ErrRuntimeReleasePending`.
+
+Add an ordering test for the explicit Kill path: a release-pending process
+scope preserves the workspace and prevents terminal-state side effects from
+being treated as completed runtime release. A later lifecycle redesign may
+durably sequence both cleanup legs, but that belongs with PR B and requires
+maintainer direction.
+
 ## Expected file surface
 
 The final implementation should stay close to this boundary; exact test file
@@ -228,6 +252,7 @@ splits may follow repository conventions.
 | tmux lifecycle | `tmux.go`, `commands.go` | wire prepare/wrap/verify/release and `remain-on-exit` |
 | Error contract | `backend/internal/ports/outbound.go` | release-pending sentinel without changing method signatures |
 | Fail-closed callers | session manager, lifecycle persistence, and shell-terminal service | preserve runtime handle, workspace, and durable records on incomplete release |
+| Container interaction | lifecycle manager tests | preserve the existing best-effort reaper while proving it cannot satisfy process release |
 | Tests | adjacent package tests and tmux integration test | state machine, parsers, errors, real process behavior |
 
 No frontend, HTTP DTO, OpenAPI, generated TypeScript, SQLite migration, or
