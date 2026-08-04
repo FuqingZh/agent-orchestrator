@@ -137,6 +137,12 @@ func writeTestKey(t *testing.T, mode os.FileMode) string {
 	if err := os.WriteFile(path, []byte("not parsed by validation-only tests"), mode); err != nil {
 		t.Fatal(err)
 	}
+	// os.WriteFile applies the process umask, so a requested insecure mode may
+	// become secure before the validator observes it. Set the fixture mode
+	// explicitly to keep this negative test independent of the host umask.
+	if err := os.Chmod(path, mode); err != nil {
+		t.Fatal(err)
+	}
 	return path
 }
 
