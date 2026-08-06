@@ -25,6 +25,7 @@ Start with [architecture.md](architecture.md) for the current backend model and
 | [adr/0004-explicit-upstream-main-snapshots.md](adr/0004-explicit-upstream-main-snapshots.md) | Why an explicitly authorized development baseline may pin and merge an upstream `main` snapshot. |
 | [plans/2026-08-03-v0.11.2-baseline-sync.md](plans/2026-08-03-v0.11.2-baseline-sync.md) | Completed historical plan for synchronizing the fork to upstream v0.11.2. |
 | [plans/2026-08-04-upstream-main-sync.md](plans/2026-08-04-upstream-main-sync.md) | Completed plan for synchronizing the fork to upstream `main` at `5f3e6bcd`. |
+| [plans/2026-08-06-v0.12.1-baseline-sync.md](plans/2026-08-06-v0.12.1-baseline-sync.md) | Planned source-only synchronization from fork `main` to upstream v0.12.1, including migration-lineage reconciliation and separate Codex black-box validation. |
 | [plans/2026-08-04-worker-process-containment.md](plans/2026-08-04-worker-process-containment.md) | Submitted upstream PR #3550 for the minimal opt-in systemd scope slice that makes tmux Restart/Destroy `setsid`-safe; awaiting maintainer review. |
 | [plans/2026-08-04-durable-runtime-cleanup.md](plans/2026-08-04-durable-runtime-cleanup.md) | Deferred PR B plan for generation-fenced cleanup facts, daemon-restart rediscovery, and bounded retry after PR A. |
 | [v0.11.2-sync-verification.md](v0.11.2-sync-verification.md) | Canonical-gate and isolated-canary evidence for the v0.11.2 fork synchronization. |
