@@ -5,13 +5,15 @@ Electron/React frontend both drive a live daemon over HTTP/SSE/WebSocket. The
 core GitHub flow works end-to-end: add project → spawn session/orchestrator →
 attach terminal → observe PR → merge.
 
-This file tracks progress. For what the product _is_ and how to run it, see the
+This file tracks progress. The synchronization candidate is pinned to upstream
+`v0.12.1` at `1df40e93772c2c48e916870d9c3ddf8f29a69f84`; for what the product
+_is_ and how to run it, see the
 top-level [`README.md`](../README.md); for the backend mental model see
 [`architecture.md`](architecture.md).
 
-This fork is synchronizing to the explicitly pinned upstream `main` snapshot
-`5f3e6bcd` under [ADR 0004](adr/0004-explicit-upstream-main-snapshots.md) and
-keeps only the downstream boundaries listed in
+This fork is synchronized from the explicitly pinned upstream `v0.12.1`
+release under [ADR 0004](adr/0004-explicit-upstream-main-snapshots.md) and keeps
+only the downstream boundaries listed in
 [`downstream-patches.md`](downstream-patches.md). Shipped migration-number
 compatibility is recorded in
 [`upstream-migration-map.md`](upstream-migration-map.md).
@@ -29,6 +31,11 @@ Frontend checks live under `frontend/` (`npm run typecheck`,
 `npm run typecheck:e2e`, and `npm test`).
 See [`AGENTS.md`](../AGENTS.md) for the regen workflow when touching the API
 surface (`npm run sqlc`, `npm run api`).
+
+The synchronization migration gate covers fresh databases, upstream v0.11.2
+and v0.12.1 histories, fork stop points, the deployed version-0040 collision,
+representative persisted review/notification/session/model data, and a
+second-pass no-op check.
 
 ## Shipped
 

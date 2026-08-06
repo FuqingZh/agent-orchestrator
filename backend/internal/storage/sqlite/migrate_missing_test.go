@@ -35,7 +35,7 @@ INSERT INTO projects (
 		t.Fatalf("seed project: %v", err)
 	}
 	if _, err := db.Exec(
-		`INSERT INTO goose_db_version (version_id, is_applied) VALUES (46, 1)`,
+		`INSERT INTO goose_db_version (version_id, is_applied) VALUES (48, 1)`,
 	); err != nil {
 		t.Fatalf("seed later migration version: %v", err)
 	}
@@ -69,5 +69,32 @@ WHERE is_applied = 1 AND version_id IN (28, 29, 30, 31)
 
 	if err := migrate(db); err != nil {
 		t.Fatalf("repeat migrate: %v", err)
+	}
+}
+
+// TestMigrateAppliesAgentModelCatalogAfterUpstreamMigration covers a database
+// that has already applied main's version 41. The catalog must use the next
+// migration version so goose applies it independently.
+func TestMigrateAppliesAgentModelCatalogAfterUpstreamMigration(t *testing.T) {
+	db, err := sql.Open("sqlite", "file:"+filepath.Join(t.TempDir(), "ao.db")+pragmas)
+	if err != nil {
+		t.Fatalf("open sqlite: %v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+
+	upTo(t, db, 41)
+
+	if err := migrate(db); err != nil {
+		t.Fatalf("migrate database after upstream migration: %v", err)
+	}
+
+	var table string
+	if err := db.QueryRow(
+		`SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'agent_model_catalog'`,
+	).Scan(&table); err != nil {
+		t.Fatalf("query agent model catalog table: %v", err)
+	}
+	if table != "agent_model_catalog" {
+		t.Fatalf("model catalog table = %q, want agent_model_catalog", table)
 	}
 }

@@ -130,12 +130,263 @@ func migrate(db *sql.DB) error {
 	if err := goose.SetDialect("sqlite3"); err != nil {
 		return fmt.Errorf("set goose dialect: %w", err)
 	}
+	if err := reconcileNativeV0112Lineage(db); err != nil {
+		return fmt.Errorf("reconcile native v0.11.2 lineage: %w", err)
+	}
+	if err := reconcileNativeV0121Lineage(db); err != nil {
+		return fmt.Errorf("reconcile native v0.12.1 lineage: %w", err)
+	}
 	// Builds can advance a database past a migration that is added or
 	// renumbered later (notably across fast-moving Nightly releases). Apply
 	// those embedded migrations instead of permanently wedging daemon startup
 	// on goose's out-of-order-history guard.
 	if err := goose.Up(db, "migrations", goose.WithAllowMissing()); err != nil {
 		return fmt.Errorf("run migrations: %w", err)
+	}
+	return reconcileSchema(db)
+}
+
+// reconcileNativeV0112Lineage records the fork's remapped orchestrator
+// migration when opening a native upstream v0.11.2 database. Upstream used
+// version 38 to create orchestrator_reengagements, while the fork's published
+// history uses version 40 for that operation. Re-running the fork migration
+// would fail on the already-existing table, so record the fork version only
+// after identifying the native physical state.
+func reconcileNativeV0112Lineage(db *sql.DB) error {
+	var gooseTable int
+	if err := db.QueryRow(
+		`SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'goose_db_version'`,
+	).Scan(&gooseTable); err != nil {
+		return err
+	}
+	if gooseTable == 0 {
+		return nil
+	}
+	for _, version := range []int64{37, 38} {
+		var applied int
+		if err := db.QueryRow(
+			`SELECT COUNT(*) FROM goose_db_version WHERE version_id = ? AND is_applied = 1`, version,
+		).Scan(&applied); err != nil {
+			return err
+		}
+		if applied == 0 {
+			return nil
+		}
+	}
+	var orchestrator, workflow int
+	if err := db.QueryRow(
+		`SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'orchestrator_reengagements'`,
+	).Scan(&orchestrator); err != nil {
+		return err
+	}
+	if err := db.QueryRow(
+		`SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'workflow_issue_runs'`,
+	).Scan(&workflow); err != nil {
+		return err
+	}
+	if orchestrator == 0 || workflow != 0 {
+		return nil
+	}
+	return markMigrationApplied(db, 40)
+}
+
+// reconcileNativeV0121Lineage records the fork's remapped migration versions
+// when opening a native upstream v0.12.1 database. Upstream used versions 42,
+// 43, 44, and 47 for schema changes that the fork must ship at 45, 46, 47, and
+// 48. The native database already contains those effects, so running the
+// fork's non-idempotent ALTER TABLE migrations again would fail before the
+// append-only reconciliation migration can run.
+func reconcileNativeV0121Lineage(db *sql.DB) error {
+	var gooseTable int
+	if err := db.QueryRow(
+		`SELECT COUNT(*) FROM sqlite_master WHERE type = 'table' AND name = 'goose_db_version'`,
+	).Scan(&gooseTable); err != nil {
+		return err
+	}
+	if gooseTable == 0 {
+		return nil
+	}
+	for _, version := range []int64{42, 43, 44, 47} {
+		var applied int
+		if err := db.QueryRow(
+			`SELECT COUNT(*) FROM goose_db_version WHERE version_id = ? AND is_applied = 1`, version,
+		).Scan(&applied); err != nil {
+			return err
+		}
+		if applied == 0 {
+			return nil
+		}
+	}
+	for _, check := range []struct {
+		table  string
+		column string
+	}{{"sessions", "reviewer_harness"}, {"sessions", "is_pinned"}, {"sessions", "pinned_at"}, {"notifications", "resolved_at"}, {"review_run", "batch_id"}} {
+		var present int
+		if err := db.QueryRow(
+			`SELECT COUNT(*) FROM pragma_table_info(?) WHERE name = ?`, check.table, check.column,
+		).Scan(&present); err != nil {
+			return err
+		}
+		if present == 0 {
+			return nil
+		}
+	}
+	for _, object := range []struct {
+		kind string
+		name string
+	}{{"index", "idx_review_run_session_pr_sha_harness"}, {"trigger", "sessions_cdc_update"}, {"table", "agent_model_catalog"}} {
+		var present int
+		if err := db.QueryRow(
+			`SELECT COUNT(*) FROM sqlite_master WHERE type = ? AND name = ?`, object.kind, object.name,
+		).Scan(&present); err != nil {
+			return err
+		}
+		if present == 0 {
+			return nil
+		}
+	}
+	for _, version := range []int64{45, 46, 48} {
+		if err := markMigrationApplied(db, version); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func markMigrationApplied(db *sql.DB, version int64) error {
+	var applied int
+	if err := db.QueryRow(
+		`SELECT COUNT(*) FROM goose_db_version WHERE version_id = ? AND is_applied = 1`, version,
+	).Scan(&applied); err != nil {
+		return err
+	}
+	if applied > 0 {
+		return nil
+	}
+	_, err := db.Exec(
+		`INSERT INTO goose_db_version (version_id, is_applied) VALUES (?, 1)`, version,
+	)
+	return err
+}
+
+// schemaRepairs lists the column-level effects of migrations that real
+// installs are known to skip. Issue #3475/#3476: profiles exist whose
+// goose_db_version already records versions 40 through 46 (written by a
+// foreign build), so goose silently skips the real migrations carrying those
+// numbers and the generated queries then fail with "no such column" — every
+// session list 500s while /healthz stays green. A versioned repair migration
+// cannot fix this class, because a burned version number is exactly what
+// caused it; instead the physical schema is verified on every startup.
+//
+// Each entry keys on one column. postAdd statements replay the rest of the
+// skipped migration's effects (backfills, index swaps) and run ONLY when the
+// column was just added, so healthy databases — where those statements would
+// clobber live data — are never touched.
+//
+// Any new migration numbered up to 0048 whose schema the generated queries
+// depend on MUST add an entry here, or the burned field profiles skip it and
+// regress to the 500s this exists to prevent.
+var schemaRepairs = []struct {
+	table   string
+	column  string
+	addDDL  string
+	postAdd []string
+}{
+	// 0043_add_session_diff_base.sql
+	{table: "sessions", column: "diff_base_sha",
+		addDDL: `ALTER TABLE sessions ADD COLUMN diff_base_sha TEXT NOT NULL DEFAULT ''`},
+	{table: "sessions", column: "diff_base_ref",
+		addDDL: `ALTER TABLE sessions ADD COLUMN diff_base_ref TEXT NOT NULL DEFAULT ''`},
+	// 0044_notification_resolution.sql
+	{table: "notifications", column: "resolved_at",
+		addDDL: `ALTER TABLE notifications ADD COLUMN resolved_at TIMESTAMP`,
+		postAdd: []string{
+			`UPDATE notifications SET resolved_at = created_at WHERE status = 'read'`,
+			`DROP INDEX IF EXISTS idx_notifications_unread_dedupe`,
+			`CREATE UNIQUE INDEX IF NOT EXISTS idx_notifications_open_dedupe
+    ON notifications(session_id, type, pr_url)
+    WHERE status = 'unread' OR resolved_at IS NULL`,
+			`CREATE INDEX IF NOT EXISTS idx_notifications_unresolved
+    ON notifications(resolved_at, created_at DESC, id DESC)`,
+		}},
+	// 0045_review_run_unique_per_harness.sql
+	{table: "sessions", column: "reviewer_harness",
+		addDDL: `ALTER TABLE sessions ADD COLUMN reviewer_harness TEXT NOT NULL DEFAULT ''`,
+		postAdd: []string{
+			`DROP INDEX IF EXISTS idx_review_run_session_pr_sha`,
+			`CREATE UNIQUE INDEX IF NOT EXISTS idx_review_run_session_pr_sha_harness
+    ON review_run (session_id, pr_url, target_sha, harness)
+    WHERE target_sha != ''
+        AND status NOT IN ('failed', 'cancelled')
+        AND (status = 'running' OR verdict NOT IN ('', 'changes_requested'))`,
+		}},
+	// 0046_add_session_pinned.sql. The trigger replay hangs off pinned_at, the
+	// second of the two columns: it references both, and SQLite resolves a
+	// trigger body at CREATE time, so it cannot run until both exist.
+	{table: "sessions", column: "is_pinned",
+		addDDL: `ALTER TABLE sessions ADD COLUMN is_pinned BOOLEAN NOT NULL DEFAULT 0`},
+	{table: "sessions", column: "pinned_at",
+		addDDL: `ALTER TABLE sessions ADD COLUMN pinned_at DATETIME`,
+		postAdd: []string{
+			`DROP TRIGGER IF EXISTS sessions_cdc_update`,
+			`CREATE TRIGGER sessions_cdc_update
+AFTER UPDATE ON sessions
+WHEN OLD.activity_state <> NEW.activity_state
+    OR OLD.is_terminated <> NEW.is_terminated
+    OR (OLD.first_signal_at IS NULL AND NEW.first_signal_at IS NOT NULL)
+    OR OLD.preview_url <> NEW.preview_url
+    OR OLD.preview_revision <> NEW.preview_revision
+    OR OLD.display_name <> NEW.display_name
+    OR OLD.terminate_on_pr_merge <> NEW.terminate_on_pr_merge
+    OR OLD.is_pinned <> NEW.is_pinned
+    OR OLD.pinned_at <> NEW.pinned_at
+    OR (OLD.pinned_at IS NULL AND NEW.pinned_at IS NOT NULL)
+    OR (OLD.pinned_at IS NOT NULL AND NEW.pinned_at IS NULL)
+BEGIN
+    INSERT INTO change_log (project_id, session_id, event_type, payload, created_at)
+    VALUES (NEW.project_id, NEW.id, 'session_updated',
+        json_object(
+            'id', NEW.id,
+            'activity', NEW.activity_state,
+            'isTerminated', json(CASE WHEN NEW.is_terminated THEN 'true' ELSE 'false' END),
+            'terminateOnPrMerge', json(CASE WHEN NEW.terminate_on_pr_merge THEN 'true' ELSE 'false' END),
+            'previewUrl', NEW.preview_url,
+            'previewRevision', NEW.preview_revision,
+            'isPinned', json(CASE WHEN NEW.is_pinned THEN 'true' ELSE 'false' END)
+        ),
+        NEW.updated_at);
+END`,
+		}},
+}
+
+// reconcileSchema verifies that the columns in schemaRepairs physically exist
+// and replays the skipped migration's effects for any that are missing. It is
+// idempotent: a healthy database (migrations applied normally, or one already
+// repaired by hand or a previous startup) is left untouched. Failures surface
+// as a specific, actionable startup error instead of an opaque INTERNAL_ERROR
+// on the first session list.
+func reconcileSchema(db *sql.DB) error {
+	for _, rc := range schemaRepairs {
+		var count int
+		if err := db.QueryRow(
+			`SELECT COUNT(*) FROM pragma_table_info(?) WHERE name = ?`, rc.table, rc.column,
+		).Scan(&count); err != nil {
+			return fmt.Errorf("schema verification: inspect %s.%s: %w", rc.table, rc.column, err)
+		}
+		if count > 0 {
+			continue
+		}
+		if _, err := db.Exec(rc.addDDL); err != nil {
+			return fmt.Errorf(
+				"schema repair: %s.%s is missing (a burned goose version skipped the migration that adds it, see #3475) and could not be added: %w",
+				rc.table, rc.column, err,
+			)
+		}
+		for _, stmt := range rc.postAdd {
+			if _, err := db.Exec(stmt); err != nil {
+				return fmt.Errorf("schema repair: replay skipped migration effects for %s.%s: %w", rc.table, rc.column, err)
+			}
+		}
 	}
 	return nil
 }
