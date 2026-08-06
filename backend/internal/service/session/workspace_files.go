@@ -294,9 +294,6 @@ func resolveWorkspaceProjectCompare(ctx context.Context, root, recordedSHA, defa
 	recordedSHA = strings.TrimSpace(recordedSHA)
 	for _, ref := range workspaceBaseRefCandidates(defaultBranch) {
 		if sha, ok := gitMergeBase(ctx, root, ref); ok {
-			if sha == recordedSHA {
-				return workspaceCompareTarget{BaseSHA: sha, Mode: WorkspaceCompareBase}
-			}
 			return workspaceCompareTarget{BaseSHA: sha, BaseRef: ref, Mode: WorkspaceCompareBase}
 		}
 	}
