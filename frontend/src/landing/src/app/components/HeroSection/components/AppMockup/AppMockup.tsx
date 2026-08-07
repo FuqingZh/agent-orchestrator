@@ -96,7 +96,7 @@ const previewAgents = {
 	codex: { agent: "Codex", icon: "/app-icons/agents/codex.svg" },
 	cursor: { agent: "Cursor", icon: "/app-icons/agents/cursor.svg" },
 	opencode: { agent: "OpenCode", icon: "/app-icons/agents/opencode.svg" },
-	copilot: { agent: "Copilot", icon: "/app-icons/agents/copilot.png" },
+	copilot: { agent: "Copilot", icon: "/app-icons/agents/copilot-color.svg" },
 	gemini: { agent: "Gemini", icon: "/app-icons/gemini.svg" },
 	aider: { agent: "Aider", icon: "/app-icons/agents/aider.png" },
 	grok: { agent: "Grok", icon: "/app-icons/agents/grok.png" },
@@ -107,7 +107,7 @@ const previewAgents = {
 	goose: { agent: "Goose", icon: "/app-icons/agents/goose.svg" },
 	continue: { agent: "Continue", icon: "/app-icons/agents/continue.png" },
 	pi: { agent: "Pi", icon: "/app-icons/agents/pi.png" },
-	kilocode: { agent: "Kilo Code", icon: "/app-icons/agents/kilocode.svg" },
+	kilocode: { agent: "Kilo Code", icon: "/app-icons/agents/kilocode.png" },
 } as const;
 
 type PreviewAgentKey = keyof typeof previewAgents;
