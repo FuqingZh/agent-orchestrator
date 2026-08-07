@@ -131,13 +131,12 @@ function AgentMenu({ currentValue, hoverId, side, targetAgent }: { currentValue:
 function DemoCursor({ x, y, pressed, clickId }: { x: number; y: number; pressed: boolean; clickId: number }) {
 	return (
 		<motion.div
-			className="pointer-events-none absolute z-40"
+			className="pointer-events-none absolute inset-0 z-40"
 			initial={false}
-			animate={{ left: `${x}%`, top: `${y}%` }}
+			animate={{ x: `${x}%`, y: `${y}%` }}
 			transition={{ type: "spring", stiffness: 240, damping: 30, mass: 0.8 }}
-			style={{ width: 0, height: 0 }}
 		>
-			<motion.div animate={{ scale: pressed ? 0.86 : 1 }} transition={{ duration: 0.16 }}>
+			<motion.div className="absolute left-0 top-0 h-0 w-0" animate={{ scale: pressed ? 0.86 : 1 }} transition={{ duration: 0.16 }}>
 				<svg
 					width="18"
 					height="18"
@@ -426,9 +425,10 @@ function ProjectAgentsModal({
 						<AnimatePresence initial={false}>
 							{intake ? (
 								<motion.div
-									initial={{ opacity: 0, height: 0 }}
-									animate={{ opacity: 1, height: "auto" }}
-									exit={{ opacity: 0, height: 0 }}
+									layout
+									initial={{ opacity: 0 }}
+									animate={{ opacity: 1 }}
+									exit={{ opacity: 0 }}
 									transition={{ duration: 0.18, ease: [0.2, 0, 0, 1] }}
 									className="overflow-hidden"
 								>
@@ -489,13 +489,17 @@ export function ProjectAgentsDemo() {
 	const inViewRef = useRef(true);
 	const [sceneIndex, setSceneIndex] = useState(0);
 	const [cursor, setCursor] = useState({ x: 70, y: 52 });
-	const [reducedMotion] = useState(
-		() =>
-			typeof window !== "undefined" &&
-			window.matchMedia("(prefers-reduced-motion: reduce)").matches,
-	);
+	const [reducedMotion, setReducedMotion] = useState(false);
 	const scene = PROJECT_AGENT_SCENES[sceneIndex] ?? PROJECT_AGENT_SCENES[0]!;
 	const clockKey = sceneClockKey(scene);
+
+	useEffect(() => {
+		const media = window.matchMedia("(prefers-reduced-motion: reduce)");
+		const update = () => setReducedMotion(media.matches);
+		update();
+		media.addEventListener("change", update);
+		return () => media.removeEventListener("change", update);
+	}, []);
 
 	/* Run the scene clock only while the card is on screen. */
 	useEffect(() => {
