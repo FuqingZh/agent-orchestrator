@@ -10,7 +10,7 @@ export type ProjectAgentMenuOption = {
 export const PROJECT_AGENT_MENU_OPTIONS: readonly ProjectAgentMenuOption[] = [
 	{ id: "claude-code", label: "Claude Code", icon: "/app-icons/agents/claude-code.svg", status: "", statusTone: "success", disabled: false },
 	{ id: "codex", label: "Codex", icon: "/app-icons/agents/codex.svg", status: "", statusTone: "success", disabled: false },
-	{ id: "copilot", label: "GitHub Copilot", icon: "/app-icons/agents/copilot.png", status: "", statusTone: "success", disabled: false },
+	{ id: "copilot", label: "GitHub Copilot", icon: "/app-icons/agents/copilot-color.svg", status: "", statusTone: "success", disabled: false },
 	{ id: "qwen", label: "Qwen Code", icon: "/app-icons/agents/qwen.png", status: "Auth unknown", statusTone: "warning", disabled: false },
 	{ id: "kimi", label: "Kimi", icon: "/app-icons/agents/kimi.png", status: "Needs auth", statusTone: "warning", disabled: true },
 	{ id: "cursor", label: "Cursor", icon: "/app-icons/agents/cursor.svg", status: "Needs install", statusTone: "muted", disabled: true },
