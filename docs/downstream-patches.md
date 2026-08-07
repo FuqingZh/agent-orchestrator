@@ -1,9 +1,10 @@
 # Downstream patch ledger
 
-Status: current for upstream `main` snapshot `5f3e6bcd`
+Status: current for upstream `v0.12.1` commit
+`1df40e93772c2c48e916870d9c3ddf8f29a69f84`
 
 This ledger classifies every intentional runtime or test-harness difference
-between upstream `v0.11.2` and this fork. A downstream patch remains only while
+between upstream `v0.12.1` and this fork. A downstream patch remains only while
 its contract is required and no stable upstream release supplies equivalent
 behavior.
 
@@ -14,7 +15,7 @@ behavior.
 | Read-only Linear intake | temporary | tracker domain/config, Linear adapter, tracker observer and CLI config | adapter, observer, daemon, and CLI tests cover project/assignee scoping, canonical identity, open-state filtering, deduplication, and no write path | an upstream stable release ships an equivalent Linear provider; compare first with #3319 or its accepted successor |
 | Bot review continuation | retained | project config, lifecycle reactions, SCM observation model | lifecycle and CLI round-trip tests cover allowlist, denylist, deduplication, edit handling, and bounded nudges | upstream routes configurable actionable bot feedback without treating all automation as human review |
 | Commented-review refresh | retained | SCM observer provider timestamp and thread semantic hashes | observer and integration tests cover provider-only updates and preservation of unrelated review state | upstream refreshes inline `COMMENTED` feedback on provider updates with equivalent polling bounds |
-| tmux integration-test isolation | retained test harness | `tmux_integration_test.go` | v0.11.2 integration tests still use the default tmux server and call `kill-server`; the fork assigns a test-scoped `TMUX_TMPDIR` | upstream isolates its integration tmux server from user sessions |
+| tmux integration-test isolation | retained test harness | `tmux_integration_test.go` | v0.12.1 integration tests still use the default tmux server and call `kill-server`; the fork assigns a test-scoped `TMUX_TMPDIR` | upstream isolates its integration tmux server from user sessions |
 
 The Symphony workflow scheduler and its runtime state machine are retired.
 Migrations `0037` and `0039` remain only because they have shipped; they do not
@@ -28,3 +29,9 @@ generated API artifacts, immutable migration history, and mechanical removal of
 trailing whitespace from an upstream SVG are not additional product patches.
 Migration `0041` is a schema-convergence repair for an already deployed fork
 version collision, not a new runtime capability.
+
+The v0.12.1 audit compared these owned surfaces against the exact release tag;
+the retained entries remain fork-only after the merge, while upstream supplies
+the shared lifecycle, review, notification, and model-catalog behavior. The
+Linear intake entry remains temporary because this release does not provide an
+equivalent read-only, project-scoped provider.

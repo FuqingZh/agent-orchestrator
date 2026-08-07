@@ -29,6 +29,7 @@ Start with [architecture.md](architecture.md) for the current backend model and
 | [plans/2026-08-04-worker-process-containment.md](plans/2026-08-04-worker-process-containment.md) | Submitted upstream PR #3550 for the minimal opt-in systemd scope slice that makes tmux Restart/Destroy `setsid`-safe; awaiting maintainer review. |
 | [plans/2026-08-04-durable-runtime-cleanup.md](plans/2026-08-04-durable-runtime-cleanup.md) | Deferred PR B plan for generation-fenced cleanup facts, daemon-restart rediscovery, and bounded retry after PR A. |
 | [v0.11.2-sync-verification.md](v0.11.2-sync-verification.md) | Canonical-gate and isolated-canary evidence for the v0.11.2 fork synchronization. |
+| [v0.12.1-sync-verification.md](v0.12.1-sync-verification.md) | Exact-head, migration-matrix, canonical-gate, and isolated-canary evidence for the v0.12.1 fork synchronization. |
 | [upstream-main-sync-verification.md](upstream-main-sync-verification.md) | Merge-specific, canonical-gate, and isolated CLI evidence for the pinned upstream `main` synchronization. |
 | [worker-process-containment-verification.md](worker-process-containment-verification.md) | Exact-head fork CI and host-canary evidence for upstream PR #3550; not upstream acceptance or production deployment. |
 | [downstream-patches.md](downstream-patches.md)       | Retained fork patches, their evidence, and the condition for deleting each one.                                      |
