@@ -83,6 +83,23 @@ func removeAllWithRetry(ctx context.Context, path string) error {
 	if err == nil || errors.Is(err, os.ErrNotExist) {
 		return nil
 	}
+	// Dependency managers such as renv legitimately create owner-owned 0500
+	// directories inside a worktree. RemoveAll cannot unlink their children,
+	// even though AO owns and is already tearing down the managed worktree.
+	// Repair only real directories owned by this process; the platform helper
+	// opens them without following symlinks, so links into system libraries are
+	// removed as links and their targets are never chmod'd.
+	if errors.Is(err, os.ErrPermission) {
+		repaired, repairErr := makeOwnerDirectoriesWritable(path)
+		if repairErr != nil {
+			return errors.Join(err, repairErr)
+		}
+		if repaired {
+			if err = removeAll(path); err == nil || errors.Is(err, os.ErrNotExist) {
+				return nil
+			}
+		}
+	}
 	if !removeAllRetryEnabled {
 		return err
 	}
