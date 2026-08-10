@@ -68,18 +68,6 @@ func (s SingleTrackerResolver) Resolve(provider domain.TrackerProvider) (ports.T
 	return nil, fmt.Errorf("tracker intake: no adapter for provider %q", provider)
 }
 
-// MultiTrackerResolver routes each configured provider to its adapter.
-type MultiTrackerResolver map[domain.TrackerProvider]ports.Tracker
-
-// Resolve returns the configured adapter for provider.
-func (m MultiTrackerResolver) Resolve(provider domain.TrackerProvider) (ports.Tracker, error) {
-	adapter := m[provider]
-	if adapter == nil {
-		return nil, fmt.Errorf("tracker intake: no adapter for provider %q", provider)
-	}
-	return adapter, nil
-}
-
 // Config holds optional observer knobs. Zero values use production defaults.
 type Config struct {
 	Tick           time.Duration
@@ -102,16 +90,7 @@ type Observer struct {
 
 // New constructs an Observer with safe defaults.
 func New(resolver TrackerResolver, store Store, spawner Spawner, cfg Config) *Observer {
-	o := &Observer{
-		resolver:       resolver,
-		store:          store,
-		spawner:        spawner,
-		tick:           cfg.Tick,
-		failureBackoff: cfg.FailureBackoff,
-		clock:          cfg.Clock,
-		logger:         cfg.Logger,
-		backoffUntil:   map[string]time.Time{},
-	}
+	o := &Observer{resolver: resolver, store: store, spawner: spawner, tick: cfg.Tick, failureBackoff: cfg.FailureBackoff, clock: cfg.Clock, logger: cfg.Logger, backoffUntil: map[string]time.Time{}}
 	if o.tick <= 0 {
 		o.tick = DefaultTickInterval
 	}
@@ -290,9 +269,6 @@ func CanonicalIssueID(id domain.TrackerID) domain.IssueID {
 func BuildIssuePrompt(issue domain.Issue) string {
 	var b strings.Builder
 	fmt.Fprintf(&b, "Work on tracker issue %s.\n\n", CanonicalIssueID(issue.ID))
-	if issue.Identifier != "" {
-		fmt.Fprintf(&b, "Identifier: %s\n", issue.Identifier)
-	}
 	if issue.Title != "" {
 		fmt.Fprintf(&b, "Title: %s\n", issue.Title)
 	}
@@ -344,17 +320,12 @@ func trackerRepo(project domain.ProjectRecord, cfg domain.TrackerIntakeConfig) (
 	if provider == "" {
 		provider = domain.TrackerProviderGitHub
 	}
-	native := strings.TrimSpace(cfg.Repo)
-	switch provider {
-	case domain.TrackerProviderGitHub:
-		if native == "" {
-			native = parseGitHubRepoNative(project.RepoOriginURL)
-		}
-	case domain.TrackerProviderLinear:
-		// Linear intake is explicitly scoped to one project UUID. It cannot be
-		// inferred from the Git repository and must be configured.
-	default:
+	if provider != domain.TrackerProviderGitHub {
 		return domain.TrackerRepo{}, false
+	}
+	native := strings.TrimSpace(cfg.Repo)
+	if native == "" {
+		native = parseGitHubRepoNative(project.RepoOriginURL)
 	}
 	if native == "" {
 		return domain.TrackerRepo{}, false

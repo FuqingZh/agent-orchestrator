@@ -24,6 +24,7 @@ import (
 	scmobserve "github.com/aoagents/agent-orchestrator/backend/internal/observe/scm"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 	"github.com/aoagents/agent-orchestrator/backend/internal/storage/sqlite"
+	"github.com/aoagents/agent-orchestrator/backend/internal/storage/sqlite/sqlitetest"
 )
 
 var scmTestRepo = ports.SCMRepo{
@@ -180,7 +181,7 @@ func newSCMFixture(t *testing.T, branch string) *scmFixture {
 	t.Helper()
 	ctx := context.Background()
 
-	store, err := sqlite.Open(t.TempDir())
+	store, err := sqlitetest.Open(t.TempDir())
 	if err != nil {
 		t.Fatalf("sqlite.Open: %v", err)
 	}
@@ -297,59 +298,6 @@ func mergedSCMObservation(prURL string, num int, headSHA string) ports.SCMObserv
 // the observation -> reducer -> store -> messenger pipeline the daemon runs in
 // production stays connected end-to-end after PR #114.
 func TestSCMObserverEndToEnd(t *testing.T) {
-	t.Run("review comment persists and reaches the owning worker", func(t *testing.T) {
-		ctx := context.Background()
-		f := newSCMFixture(t, "feat/review")
-		const (
-			prURL   = "https://github.com/octocat/hello/pull/41"
-			headSHA = "reviewed"
-		)
-		f.provider.detected["feat/review"] = ports.SCMPRObservation{
-			URL: prURL, Number: 41, SourceBranch: "feat/review", HeadRepo: scmTestRepo.Repo, TargetBranch: "main", HeadSHA: headSHA,
-		}
-		f.provider.observations[41] = openSCMObservation(
-			prURL,
-			41,
-			headSHA,
-			"feat/review",
-			"main",
-			domain.MergeMergeable,
-		)
-		f.provider.reviews[41] = ports.SCMReviewObservation{
-			Decision: string(domain.ReviewRequired),
-			Threads: []ports.SCMReviewThreadObservation{{
-				ID:   "thread-41",
-				Path: "review.go",
-				Line: 41,
-				Comments: []ports.SCMReviewCommentObservation{{
-					ID:     "comment-41",
-					Author: "reviewer",
-					Body:   "Preserve the canceled terminal state.",
-					URL:    prURL + "#discussion_r41",
-				}},
-			}},
-		}
-
-		if err := f.observer.Poll(ctx); err != nil {
-			t.Fatalf("Poll: %v", err)
-		}
-
-		comments, err := f.store.ListPRComments(ctx, prURL)
-		if err != nil {
-			t.Fatalf("ListPRComments: %v", err)
-		}
-		if len(comments) != 1 || comments[0].Body != "Preserve the canceled terminal state." {
-			t.Fatalf("persisted review comments = %+v", comments)
-		}
-		msgs := f.spy.snapshot()
-		if len(msgs) != 1 || msgs[0].session != f.session.ID {
-			t.Fatalf("review nudges = %+v, want one for %s", msgs, f.session.ID)
-		}
-		if !strings.Contains(msgs[0].body, "Preserve the canceled terminal state.") {
-			t.Fatalf("review nudge body = %q", msgs[0].body)
-		}
-	})
-
 	t.Run("CI failing observation persists rows, nudges once, and is idempotent on re-poll", func(t *testing.T) {
 		ctx := context.Background()
 		f := newSCMFixture(t, "feat/x")

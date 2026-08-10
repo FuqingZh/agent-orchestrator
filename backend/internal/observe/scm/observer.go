@@ -1020,11 +1020,7 @@ func (o *Observer) refreshReviews(ctx context.Context, subjects map[string]*subj
 		if hasObs && obs.Review.Decision != "" {
 			decision = obs.Review.Decision
 		}
-		providerUpdatedAt := time.Time{}
-		if hasObs {
-			providerUpdatedAt = obs.PR.UpdatedAtProvider
-		}
-		if !o.needsReviewRefresh(pkey, s.known, decision, hasObs, providerUpdatedAt, now) {
+		if !o.needsReviewRefresh(pkey, s.known, decision, hasObs, now) {
 			continue
 		}
 		review, err := o.provider.FetchReviewThreads(ctx, ports.SCMPRRef{Repo: s.repo, Number: s.known.Number, URL: s.known.URL})
@@ -1066,17 +1062,11 @@ func (o *Observer) refreshReviews(ctx context.Context, subjects map[string]*subj
 	}
 }
 
-func (o *Observer) needsReviewRefresh(key string, local domain.PullRequest, decision string, hasObs bool, providerUpdatedAt, now time.Time) bool {
+func (o *Observer) needsReviewRefresh(key string, local domain.PullRequest, decision string, hasObs bool, now time.Time) bool {
 	if o.Cache.ReviewRefreshFailed[key] {
 		return true
 	}
 	if local.ReviewHash == "" {
-		return true
-	}
-	// COMMENTED reviews leave GitHub's aggregate review decision unchanged but
-	// advance the provider PR timestamp. Refresh threads on that edge so inline
-	// feedback reaches the owning worker without polling every open PR.
-	if hasObs && !providerUpdatedAt.IsZero() && providerUpdatedAt.After(local.UpdatedAtProvider) {
 		return true
 	}
 	if decision == string(domain.ReviewChangesRequest) {
@@ -1093,11 +1083,6 @@ func (o *Observer) needsReviewRefresh(key string, local domain.PullRequest, deci
 }
 
 func (o *Observer) prepareForPersistence(obs ports.SCMObservation, local domain.PullRequest, opts persistenceOptions, now time.Time) ports.SCMObservation {
-	for i := range obs.Review.Threads {
-		if obs.Review.Threads[i].SemanticHash == "" {
-			obs.Review.Threads[i].SemanticHash = threadSemanticHash(obs.Review.Threads[i])
-		}
-	}
 	metadataHash := metadataSemanticHash(obs)
 	if opts.preserveLocalMetadataHash {
 		metadataHash = local.MetadataHash
@@ -1213,11 +1198,7 @@ func domainFromObservation(sessionID domain.SessionID, obs ports.SCMObservation,
 	}
 	comments := make([]domain.PullRequestComment, 0, commentCount)
 	for _, th := range obs.Review.Threads {
-		semanticHash := th.SemanticHash
-		if semanticHash == "" {
-			semanticHash = threadSemanticHash(th)
-		}
-		threads = append(threads, domain.PullRequestReviewThread{ThreadID: th.ID, Path: th.Path, Line: th.Line, Resolved: th.Resolved, IsBot: th.IsBot, SemanticHash: semanticHash, UpdatedAt: now})
+		threads = append(threads, domain.PullRequestReviewThread{ThreadID: th.ID, Path: th.Path, Line: th.Line, Resolved: th.Resolved, IsBot: th.IsBot, SemanticHash: threadSemanticHash(th), UpdatedAt: now})
 		for _, c := range th.Comments {
 			comments = append(comments, domain.PullRequestComment{ThreadID: th.ID, ID: c.ID, Author: c.Author, File: th.Path, Line: th.Line, Body: c.Body, URL: c.URL, Resolved: th.Resolved, IsBot: c.IsBot || th.IsBot, CreatedAt: now})
 		}

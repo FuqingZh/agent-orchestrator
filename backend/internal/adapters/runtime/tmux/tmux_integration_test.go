@@ -17,7 +17,6 @@ func TestRuntimeIntegration(t *testing.T) {
 	if _, err := exec.LookPath("tmux"); err != nil {
 		t.Skip("tmux unavailable")
 	}
-	isolateTestServer(t)
 
 	ctx := context.Background()
 	id := strings.ReplaceAll(t.Name(), "/", "_")
@@ -84,67 +83,12 @@ func TestRuntimeIntegration(t *testing.T) {
 	}
 }
 
-func TestRuntimeIntegrationDoesNotInheritLinearCredentials(t *testing.T) {
-	if _, err := exec.LookPath("tmux"); err != nil {
-		t.Skip("tmux unavailable")
-	}
-	isolateTestServer(t)
-	t.Setenv("AO_LINEAR_API_KEY", "test-api-key")
-	t.Setenv("AO_LINEAR_OAUTH_TOKEN", "test-oauth-token")
-
-	ctx := context.Background()
-	id := strings.ReplaceAll(t.Name(), "/", "_")
-	seedID := id + "_seed"
-	seed := exec.CommandContext(
-		ctx,
-		"tmux",
-		"new-session",
-		"-d",
-		"-s",
-		seedID,
-		"sh",
-		"-c",
-		"sleep 30",
-	)
-	seed.Env = os.Environ()
-	if out, err := seed.CombinedOutput(); err != nil {
-		t.Fatalf("start credential-retaining tmux server: %v: %s", err, out)
-	}
-	t.Cleanup(func() {
-		_ = exec.Command("tmux", "kill-server").Run()
-	})
-
-	r := New(Options{Timeout: 5 * time.Second})
-	t.Cleanup(func() {
-		_ = r.Destroy(context.Background(), ports.RuntimeHandle{ID: id})
-	})
-
-	h, err := r.Create(ctx, ports.RuntimeConfig{
-		SessionID:     domain.SessionID(id),
-		WorkspacePath: t.TempDir(),
-		Argv: []string{
-			"sh",
-			"-c",
-			`if env | grep -q '^AO_LINEAR_'; then echo linear-credential-leaked; else echo linear-credential-clean; fi`,
-		},
-	})
-	if err != nil {
-		t.Fatalf("Create: %v", err)
-	}
-
-	out := waitForOutput(t, r, h, "linear-credential-clean", 5*time.Second)
-	if strings.Contains(out, "linear-credential-leaked") {
-		t.Fatalf("worker pane inherited a Linear credential variable: %q", out)
-	}
-}
-
 // TestRuntimeIntegrationExactSessionParsing verifies that IsAlive uses exact
 // session matching and does not treat a prefix as a live session.
 func TestRuntimeIntegrationExactSessionParsing(t *testing.T) {
 	if _, err := exec.LookPath("tmux"); err != nil {
 		t.Skip("tmux unavailable")
 	}
-	isolateTestServer(t)
 
 	ctx := context.Background()
 	base := strings.ReplaceAll(t.Name(), "/", "_")
@@ -188,7 +132,6 @@ func TestRuntimeIntegrationSupervisedExitKeepsInteractiveShell(t *testing.T) {
 	if _, err := exec.LookPath("tmux"); err != nil {
 		t.Skip("tmux unavailable")
 	}
-	isolateTestServer(t)
 
 	ctx := context.Background()
 	id := strings.ReplaceAll(t.Name(), "/", "_")
@@ -283,23 +226,6 @@ func TestSupervisorProcessHelper(t *testing.T) {
 		return
 	}
 	time.Sleep(2 * time.Second)
-}
-
-// isolateTestServer keeps integration tests off the user's tmux server and
-// ensures process-tree probes observe processes created in this test's scope.
-func isolateTestServer(t *testing.T) {
-	t.Helper()
-	socketRoot, err := os.MkdirTemp("/tmp", "ao-tmux-")
-	if err != nil {
-		t.Fatalf("create tmux socket root: %v", err)
-	}
-	t.Cleanup(func() {
-		if err := os.RemoveAll(socketRoot); err != nil {
-			t.Errorf("remove tmux socket root: %v", err)
-		}
-	})
-	t.Setenv("TMUX", "")
-	t.Setenv("TMUX_TMPDIR", socketRoot)
 }
 
 // waitForOutput polls GetOutput until out contains want or the deadline passes.

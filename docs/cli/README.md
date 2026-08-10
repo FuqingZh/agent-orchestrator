@@ -101,10 +101,12 @@ directly. Supporting assets must not replace an active application preview.
 `ao browser` also resolves its target from `AO_SESSION_ID`, but controls the
 session-owned live Electron browser rather than only setting its preview URL.
 The target-isolated command set includes `status`, `open`, `snapshot`, `click`,
-`fill`, `type`, `press`, `hover`, `scroll`, `select`, `check`, `uncheck`, `get`,
-`highlight`, `unhighlight`, `tabs`, `tab new`, `tab select`, `tab close`,
+`dblclick`, `focus`, `fill`, `type`, `press`, `hover`, `scroll`,
+`scrollintoview`, `drag`, `select`, `check`, `uncheck`, `get`, `highlight`,
+`unhighlight`, `tabs`, `tab new`, `tab select`, `tab close`, `frame`, `dialog`,
 `wait`, `screenshot`, `network start/status/list/stop/clear`, `console`, and
-`errors`. Logical tab IDs remain stable for the session, and allowed popups
+`errors`. The native engine is bound internally; there is no second command or
+connection setup. Logical tab IDs remain stable for the session, and allowed popups
 become AO browser tabs rather than separate OS-browser windows. The AO desktop
 app must be open because Electron owns the `WebContentsView`.
 References from a snapshot are invalidated after navigation or DOM replacement;
@@ -144,55 +146,6 @@ The CLI and daemon share the same environment-driven config:
 | `AO_KEEP_DAEMON`      | unset (off)          | Keep the desktop app's daemon running after the window closes; stop only via `ao stop`. (fork) |
 
 The daemon always binds `127.0.0.1`.
-
-### GitHub credentials
-
-AO resolves GitHub credentials in this order:
-
-1. `AO_GITHUB_TOKEN`, when explicitly set;
-2. a GitHub App installation configured with all three variables below;
-3. the legacy `GITHUB_TOKEN` or `gh auth token` fallback when no App setting is
-   present.
-
-| Var                                  | Purpose                                      |
-| ------------------------------------ | -------------------------------------------- |
-| `AO_GITHUB_APP_ID`                   | Numeric GitHub App ID.                       |
-| `AO_GITHUB_APP_INSTALLATION_ID`      | Numeric installation ID.                    |
-| `AO_GITHUB_APP_PRIVATE_KEY_FILE`     | Absolute path to the App private-key file.   |
-
-The App source requests an installation token lazily and refreshes it before
-its one-hour lifetime expires. On Unix, the key must be a regular, non-symlink
-file with no group or other permissions (for example, mode `0600`). If any App
-variable is present, all three are required; invalid App configuration fails
-closed and does not fall back to a broader host credential.
-
-### Linear credentials
-
-Linear issue intake uses exactly one explicitly AO-scoped credential:
-
-| Variable                | Purpose |
-| ----------------------- | ------- |
-| `AO_LINEAR_API_KEY`     | Personal API key, sent as Linear's raw `Authorization` value. |
-| `AO_LINEAR_OAUTH_TOKEN` | OAuth access token, sent with the `Bearer` scheme. |
-
-Configuring both variables fails closed. Enable Linear intake per project with
-`--tracker-intake --tracker-provider linear --tracker-repo PROJECT_UUID
---tracker-assignee USER_ID`. The project UUID and assignee are explicit safety
-boundaries; AO does not infer or broaden either value. The daemon reads tracker
-state and starts one worker for each matching open issue. Tracker writes remain
-agent- or human-owned.
-
-AO removes both Linear credential variables from the ambient environment before
-launching tmux or a Windows ConPTY host, and project worker configuration may
-not set these daemon-only keys. Tmux worker launch commands also clear both
-variables so an older, still-running server cannot reintroduce them into new
-panes. These are inheritance guards, not operating-system isolation from a
-permissionless worker running as the same user.
-
-AO stores the stable Linear issue UUID as `linear:<uuid>` in the session. A
-live session suppresses duplicate intake; a terminated session can be recreated
-while the issue remains open and eligible. Completed and cancelled Linear
-issues are not intake candidates.
 
 ## Manual smoke test
 

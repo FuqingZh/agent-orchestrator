@@ -61,8 +61,8 @@ WHERE is_applied = 1
 `).Scan(&current); err != nil {
 				t.Fatalf("read current migration version: %v", err)
 			}
-			if current != 49 {
-				t.Fatalf("current migration version = %d, want 49", current)
+			if current != 82 {
+				t.Fatalf("current migration version = %d, want 82", current)
 			}
 
 			var appliedBefore int
@@ -142,8 +142,8 @@ WHERE is_applied = 1
 `).Scan(&current); err != nil {
 		t.Fatalf("read repaired migration version: %v", err)
 	}
-	if current != 49 {
-		t.Fatalf("repaired migration version = %d, want 49", current)
+	if current != 82 {
+		t.Fatalf("repaired migration version = %d, want 82", current)
 	}
 }
 
@@ -212,6 +212,14 @@ func TestMappedUpstreamMigrationsKeepRecordedContent(t *testing.T) {
 		{
 			path: "migrations/0048_agent_model_catalog.sql",
 			want: "cafb59d968d0941e04219dfabefc7e8440cbfb51ef4695be9904361e2bb9c4da",
+		},
+		{
+			path: "migrations/0050_review_agent_session_id.sql",
+			want: "440eac3ebdd773e4fa70824d5137ac3b1704d706618d7d947da88407c6d23a7e",
+		},
+		{
+			path: "migrations/0051_review_per_harness.sql",
+			want: "720fb0658b813368d3ae9aab914634c85638582207f6f506fa9139a21527ff1a",
 		},
 	} {
 		t.Run(tc.path, func(t *testing.T) {

@@ -217,13 +217,12 @@ func issueFromGH(owner, repo string, raw ghIssue) domain.Issue {
 			Provider: domain.TrackerProviderGitHub,
 			Native:   fmt.Sprintf("%s/%s#%d", owner, repo, raw.Number),
 		},
-		Identifier: fmt.Sprintf("%s/%s#%d", owner, repo, raw.Number),
-		Title:      raw.Title,
-		Body:       raw.Body,
-		State:      mapStateFromGitHub(raw.State, raw.StateReason, labels),
-		URL:        raw.HTMLURL,
-		Labels:     labels,
-		Assignees:  assignees,
+		Title:     raw.Title,
+		Body:      raw.Body,
+		State:     mapStateFromGitHub(raw.State, raw.StateReason, labels),
+		URL:       raw.HTMLURL,
+		Labels:    labels,
+		Assignees: assignees,
 	}
 	if len(out.Labels) == 0 {
 		out.Labels = nil

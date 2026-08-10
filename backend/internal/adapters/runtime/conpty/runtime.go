@@ -11,7 +11,6 @@ import (
 	"time"
 
 	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/runtime/conpty/ptyregistry"
-	"github.com/aoagents/agent-orchestrator/backend/internal/adapters/runtime/runtimeenv"
 	"github.com/aoagents/agent-orchestrator/backend/internal/ports"
 )
 
@@ -68,9 +67,6 @@ func (r *Runtime) Create(ctx context.Context, cfg ports.RuntimeConfig) (ports.Ru
 	}
 	if len(cfg.Argv) == 0 {
 		return ports.RuntimeHandle{}, fmt.Errorf("conpty: argv required")
-	}
-	if err := runtimeenv.ValidateWorkerMap(cfg.Env); err != nil {
-		return ports.RuntimeHandle{}, fmt.Errorf("conpty: %w", err)
 	}
 
 	r.mu.Lock()
@@ -200,6 +196,16 @@ func (r *Runtime) Interrupt(ctx context.Context, handle ports.RuntimeHandle) err
 		return fmt.Errorf("conpty: session %q not found", handle.ID)
 	}
 	return clientSendInput(sess.addr, "\x03")
+}
+
+// SendInput writes raw terminal input without appending Enter. It is intended
+// for TUI keybindings such as Escape rather than prompt text.
+func (r *Runtime) SendInput(ctx context.Context, handle ports.RuntimeHandle, input string) error {
+	sess := r.resolve(handle.ID)
+	if sess == nil {
+		return fmt.Errorf("conpty: session %q not found", handle.ID)
+	}
+	return clientSendInput(sess.addr, input)
 }
 
 // GetOutput returns the last lines lines from the pty-host ring buffer.

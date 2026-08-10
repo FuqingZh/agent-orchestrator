@@ -2,7 +2,6 @@ package lifecycle
 
 import (
 	"context"
-	"crypto/sha256"
 	"encoding/json"
 	"fmt"
 	"log/slog"
@@ -16,10 +15,7 @@ import (
 	"github.com/aoagents/agent-orchestrator/backend/internal/sessionguard"
 )
 
-const (
-	reviewMaxNudge    = 3
-	botReviewMaxNudge = 2
-)
+const reviewMaxNudge = 3
 
 // ReviewDeliveryOutcome reports what ApplyReviewBatch did with completed
 // AO-internal review passes.
@@ -199,14 +195,8 @@ func (m *Manager) ApplyPRObservation(ctx context.Context, id domain.SessionID, o
 			nudges = append(nudges, pendingNudge{key: "ci:" + o.URL, sig: ciFailureSignature(checks), msg: msg, maxAttempts: 0})
 		}
 	}
-	humanComments := unresolvedHumanReviewComments(o.Comments)
-	botComments := unresolvedBotReviewComments(o.Comments)
-	// An actionable bot comment already carries the concrete changes-requested
-	// feedback. Do not also send the aggregate decision fallback for the same
-	// observation; that fallback remains necessary when no deliverable inline
-	// feedback exists.
-	if len(humanComments) > 0 || (o.Review == domain.ReviewChangesRequest && len(botComments) == 0) {
-		comments := humanComments
+	if o.Review == domain.ReviewChangesRequest || hasUnresolvedComments(o.Comments) {
+		comments := unresolvedReviewComments(o.Comments)
 		msg := formatReviewCommentsMessage(comments)
 		if ident != "your PR" {
 			msg = strings.Replace(msg, "your PR", ident, 1)
@@ -219,16 +209,6 @@ func (m *Manager) ApplyPRObservation(ctx context.Context, id domain.SessionID, o
 			sig = string(o.Review)
 		}
 		nudges = append(nudges, pendingNudge{key: "review:" + o.URL, sig: sig, msg: msg, maxAttempts: reviewMaxNudge})
-	}
-	if len(botComments) > 0 {
-		msg := formatReviewCommentsMessage(botComments)
-		if ident != "your PR" {
-			msg = strings.Replace(msg, "your PR", ident, 1)
-		}
-		if o.URL != "" {
-			msg += "\nPR: " + domain.SanitizeControlChars(o.URL)
-		}
-		nudges = append(nudges, pendingNudge{key: "review-bot:" + o.URL, sig: botReviewCommentsSignature(botComments), msg: msg, maxAttempts: botReviewMaxNudge})
 	}
 	// Only the merge-conflict nudge needs a store read (the parent-stack check).
 	// A read error there must NOT discard the CI/review nudges already queued
@@ -332,40 +312,24 @@ func (m *Manager) ApplySCMObservation(ctx context.Context, id domain.SessionID, 
 	if !o.Fetched {
 		return nil
 	}
-	cfg, err := m.projectConfigForSession(ctx, id)
-	if err != nil {
+	if err := m.ApplyPRObservation(ctx, id, scmToPRObservation(o)); err != nil {
 		return err
 	}
-	if err := m.ApplyPRObservation(ctx, id, scmToPRObservation(o, cfg)); err != nil {
-		return err
-	}
-	intent, err := m.notificationIntentForCurrentSCM(ctx, id, o, cfg)
+	intent, err := m.notificationIntentForCurrentSCM(ctx, id, o)
 	if err != nil {
 		return err
 	}
 	m.emitNotification(ctx, intent)
-	m.resolveNotifications(ctx, readyToMergeResolutions(id, o, cfg, m.clock())...)
+	m.resolveNotifications(ctx, readyToMergeResolutions(id, o, m.clock())...)
 	return nil
-}
-
-func (m *Manager) projectConfigForSession(ctx context.Context, id domain.SessionID) (domain.ProjectConfig, error) {
-	rec, ok, err := m.store.GetSession(ctx, id)
-	if err != nil || !ok || rec.ProjectID == "" {
-		return domain.ProjectConfig{}, err
-	}
-	project, ok, err := m.store.GetProject(ctx, string(rec.ProjectID))
-	if err != nil || !ok {
-		return domain.ProjectConfig{}, err
-	}
-	return project.Config, nil
 }
 
 // readyToMergeResolutions reports the ready-to-merge notification this
 // observation made stale. The PR either got merged/closed, or stopped being
 // mergeable — either way the "this is ready for you to merge" ping no longer
 // describes anything the user can act on.
-func readyToMergeResolutions(id domain.SessionID, o ports.SCMObservation, cfg domain.ProjectConfig, now time.Time) []ports.NotificationResolution {
-	if scmObservationIsReadyToMerge(o, cfg) {
+func readyToMergeResolutions(id domain.SessionID, o ports.SCMObservation, now time.Time) []ports.NotificationResolution {
+	if scmObservationIsReadyToMerge(o) {
 		return nil
 	}
 	return []ports.NotificationResolution{{
@@ -376,7 +340,7 @@ func readyToMergeResolutions(id domain.SessionID, o ports.SCMObservation, cfg do
 	}}
 }
 
-func (m *Manager) notificationIntentForCurrentSCM(ctx context.Context, id domain.SessionID, o ports.SCMObservation, cfg domain.ProjectConfig) (*ports.NotificationIntent, error) {
+func (m *Manager) notificationIntentForCurrentSCM(ctx context.Context, id domain.SessionID, o ports.SCMObservation) (*ports.NotificationIntent, error) {
 	// Serialize the session snapshot with activity transitions so ready-to-merge
 	// notifications do not race against a simultaneous waiting_input update.
 	m.mu.Lock()
@@ -388,10 +352,10 @@ func (m *Manager) notificationIntentForCurrentSCM(ctx context.Context, id domain
 	if !ok {
 		return nil, nil
 	}
-	return m.notificationIntentForSCM(rec, o, cfg), nil
+	return m.notificationIntentForSCM(rec, o), nil
 }
 
-func (m *Manager) notificationIntentForSCM(rec domain.SessionRecord, o ports.SCMObservation, cfg domain.ProjectConfig) *ports.NotificationIntent {
+func (m *Manager) notificationIntentForSCM(rec domain.SessionRecord, o ports.SCMObservation) *ports.NotificationIntent {
 	prURL := firstSCMNonEmpty(o.PR.URL, o.PR.HTMLURL)
 	base := ports.NotificationIntent{
 		SessionID:          rec.ID,
@@ -414,7 +378,7 @@ func (m *Manager) notificationIntentForSCM(rec domain.SessionRecord, o ports.SCM
 		base.Type = domain.NotificationPRClosedUnmerged
 		return &base
 	}
-	if rec.IsTerminated || rec.Activity.State.NeedsInput() || !scmObservationIsReadyToMerge(o, cfg) {
+	if rec.IsTerminated || rec.Activity.State.NeedsInput() || !scmObservationIsReadyToMerge(o) {
 		return nil
 	}
 	base.Type = domain.NotificationReadyToMerge
@@ -425,7 +389,7 @@ func (m *Manager) notificationIntentForSCM(rec domain.SessionRecord, o ports.SCM
 // readiness rule (domain.MergeReadiness). Startup reconciliation applies the
 // same rule to the stored facts, so the two paths cannot disagree about what
 // "ready to merge" means.
-func scmObservationIsReadyToMerge(o ports.SCMObservation, cfg domain.ProjectConfig) bool {
+func scmObservationIsReadyToMerge(o ports.SCMObservation) bool {
 	return domain.MergeReadiness{
 		Draft:              o.PR.Draft,
 		Merged:             o.PR.Merged,
@@ -433,20 +397,17 @@ func scmObservationIsReadyToMerge(o ports.SCMObservation, cfg domain.ProjectConf
 		CI:                 domain.CIState(o.CI.Summary),
 		Review:             domain.ReviewDecision(o.Review.Decision),
 		Mergeability:       domain.Mergeability(o.Mergeability.State),
-		UnresolvedComments: hasUnresolvedSCMComments(o.Review.Threads, cfg),
+		UnresolvedComments: hasUnresolvedSCMComments(o.Review.Threads),
 	}.ReadyToMerge()
 }
 
-func hasUnresolvedSCMComments(threads []ports.SCMReviewThreadObservation, cfg domain.ProjectConfig) bool {
+func hasUnresolvedSCMComments(threads []ports.SCMReviewThreadObservation) bool {
 	for _, th := range threads {
-		if th.Resolved {
+		if th.Resolved || th.IsBot {
 			continue
 		}
 		for _, c := range th.Comments {
-			if !c.IsBot && !th.IsBot {
-				return true
-			}
-			if botReviewCommentActionable(th, c, cfg) {
+			if !c.IsBot {
 				return true
 			}
 		}
@@ -454,7 +415,7 @@ func hasUnresolvedSCMComments(threads []ports.SCMReviewThreadObservation, cfg do
 	return false
 }
 
-func scmToPRObservation(o ports.SCMObservation, cfg domain.ProjectConfig) ports.PRObservation {
+func scmToPRObservation(o ports.SCMObservation) ports.PRObservation {
 	pr := ports.PRObservation{
 		Fetched:      o.Fetched,
 		URL:          firstSCMNonEmpty(o.PR.URL, o.PR.HTMLURL),
@@ -497,42 +458,26 @@ func scmToPRObservation(o ports.SCMObservation, cfg domain.ProjectConfig) ports.
 		})
 	}
 	for _, th := range o.Review.Threads {
-		if th.Resolved {
+		if th.Resolved || th.IsBot {
 			continue
 		}
 		for _, c := range th.Comments {
-			isBot := c.IsBot || th.IsBot
-			if isBot && !botReviewCommentActionable(th, c, cfg) {
+			if c.IsBot {
 				continue
 			}
 			pr.Comments = append(pr.Comments, ports.PRCommentObservation{
-				ID:           c.ID,
-				ThreadID:     th.ID,
-				Author:       c.Author,
-				File:         th.Path,
-				Line:         th.Line,
-				Body:         c.Body,
-				URL:          c.URL,
-				Resolved:     th.Resolved,
-				IsBot:        isBot,
-				SemanticHash: th.SemanticHash,
+				ID:       c.ID,
+				ThreadID: th.ID,
+				Author:   c.Author,
+				File:     th.Path,
+				Line:     th.Line,
+				Body:     c.Body,
+				URL:      c.URL,
+				Resolved: th.Resolved,
 			})
 		}
 	}
 	return pr
-}
-
-func botReviewCommentActionable(th ports.SCMReviewThreadObservation, c ports.SCMReviewCommentObservation, cfg domain.ProjectConfig) bool {
-	if !c.IsBot && !th.IsBot {
-		return false
-	}
-	if strings.TrimSpace(th.Path) == "" || th.Line <= 0 {
-		return false
-	}
-	if strings.TrimSpace(c.Body) == "" {
-		return false
-	}
-	return cfg.BotReviewFeedback.AllowsAuthor(c.Author)
 }
 
 // ApplyTrackerFacts reacts to a fetched Tracker issue observation. It owns the
@@ -645,26 +590,13 @@ func prIdentity(o ports.PRObservation) string {
 	return id
 }
 
-func unresolvedHumanReviewComments(comments []ports.PRCommentObservation) []ports.PRCommentObservation {
-	unresolved := make([]ports.PRCommentObservation, 0, len(comments))
+func hasUnresolvedComments(comments []ports.PRCommentObservation) bool {
 	for _, c := range comments {
-		if c.Resolved || c.IsBot {
-			continue
+		if !c.Resolved {
+			return true
 		}
-		unresolved = append(unresolved, c)
 	}
-	return unresolved
-}
-
-func unresolvedBotReviewComments(comments []ports.PRCommentObservation) []ports.PRCommentObservation {
-	unresolved := make([]ports.PRCommentObservation, 0, len(comments))
-	for _, c := range comments {
-		if c.Resolved || !c.IsBot {
-			continue
-		}
-		unresolved = append(unresolved, c)
-	}
-	return unresolved
+	return false
 }
 
 func failedPRChecks(checks []ports.PRCheckObservation) []ports.PRCheckObservation {
@@ -721,6 +653,17 @@ func formatCIFailureMessage(checks []ports.PRCheckObservation) string {
 	return msg.String()
 }
 
+func unresolvedReviewComments(comments []ports.PRCommentObservation) []ports.PRCommentObservation {
+	unresolved := make([]ports.PRCommentObservation, 0, len(comments))
+	for _, c := range comments {
+		if c.Resolved {
+			continue
+		}
+		unresolved = append(unresolved, c)
+	}
+	return unresolved
+}
+
 func reviewCommentsSignature(comments []ports.PRCommentObservation) string {
 	parts := make([]string, 0, len(comments))
 	for _, c := range comments {
@@ -730,37 +673,6 @@ func reviewCommentsSignature(comments []ports.PRCommentObservation) string {
 			continue
 		}
 		parts = append(parts, threadID+"\x00"+id)
-	}
-	sort.Strings(parts)
-	return strings.Join(parts, "\x01")
-}
-
-func botReviewCommentsSignature(comments []ports.PRCommentObservation) string {
-	parts := make([]string, 0, len(comments))
-	seen := map[string]bool{}
-	for _, c := range comments {
-		id := strings.TrimSpace(c.ID)
-		threadID := strings.TrimSpace(c.ThreadID)
-		if id == "" && threadID == "" {
-			continue
-		}
-		// PRCommentObservation is already the allowlisted delivery projection.
-		// Hash only those delivered fields: a provider thread hash may include
-		// filtered comments and would re-nudge when rejected feedback changes.
-		sum := sha256.Sum256([]byte(strings.Join([]string{
-			threadID,
-			id,
-			c.Author,
-			c.File,
-			fmt.Sprint(c.Line),
-			c.Body,
-			c.URL,
-		}, "\x00")))
-		part := fmt.Sprintf("%x", sum)
-		if !seen[part] {
-			parts = append(parts, part)
-			seen[part] = true
-		}
 	}
 	sort.Strings(parts)
 	return strings.Join(parts, "\x01")

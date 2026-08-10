@@ -211,10 +211,6 @@ type lifecycleStore struct {
 	sessions map[domain.SessionID]domain.SessionRecord
 }
 
-func (s *lifecycleStore) GetProject(_ context.Context, _ string) (domain.ProjectRecord, bool, error) {
-	return domain.ProjectRecord{}, false, nil
-}
-
 func (s *lifecycleStore) GetSession(_ context.Context, id domain.SessionID) (domain.SessionRecord, bool, error) {
 	r, ok := s.sessions[id]
 	return r, ok, nil

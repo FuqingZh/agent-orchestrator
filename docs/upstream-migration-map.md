@@ -1,17 +1,43 @@
 # Upstream migration map
 
-Status: current for upstream `v0.12.1`
+Status: current for direct upstream `v0.12.2` synchronization
+(`b6609ae610e809309be86fce56c0845cc45628cb`)
 
-This ledger preserves the relationship between immutable upstream SQLite
-migrations and the versions shipped by this fork. The fork must never modify a
-migration already recorded by a deployed database. When a pinned upstream
-release reuses one of those version numbers, copy the upstream migration to the
-next unused fork version without changing its contents.
+The runtime source follows upstream `v0.12.2`. The migration files below are
+the only fork-line compatibility retained in the candidate. Already-published
+fork migrations are immutable; upstream migrations that collide with an
+unpublished fork number are copied byte-for-byte to the next available number.
 
-| Upstream source | Upstream commit | Fork path | SHA-256 |
+## Fork-line immutable history
+
+These files are retained because fork databases may have recorded their
+versions. They do not restore the fork runtime behavior that created them.
+
+| Version | File | Role |
+| ---: | --- | --- |
+| 37 | `0037_workflow_issue_runs.sql` | shipped fork history; later dropped |
+| 38 | `0038_drop_worker_idle_outbox.sql` | upstream 0037 content, mapped |
+| 39 | `0039_drop_workflow_issue_runs.sql` | shipped fork history; later dropped |
+| 40 | `0040_orchestrator_reengagement.sql` | upstream 0038 content, mapped |
+| 41 | `0041_repair_orchestrator_reengagement.sql` | repair for deployed fork version-40 collision |
+| 42 | `0042_drop_orchestrator_reengagement.sql` | upstream 0039 content, mapped |
+| 43 | `0043_add_session_diff_base.sql` | upstream 0040 content, mapped |
+| 44 | `0044_notification_resolution.sql` | upstream 0041 content, mapped |
+| 45 | `0045_review_run_unique_per_harness.sql` | upstream 0042 content, mapped |
+| 46 | `0046_add_session_pinned.sql` | upstream 0043 content, mapped |
+| 47 | `0047_backfill_review_run_batch_id.sql` | upstream 0044 content, mapped |
+| 48 | `0048_agent_model_catalog.sql` | upstream 0047 content, mapped |
+| 49 | `0049_reconcile_v0121_native_lineage.sql` | append-only native-lineage reconciliation |
+
+## Upstream source and candidate mapping
+
+The SHA-256 column is over the complete SQL file. Mapped rows must remain
+byte-identical to the source file at the recorded upstream commit.
+
+| Upstream source | Upstream commit | Candidate path | SHA-256 |
 | --- | --- | --- | --- |
 | `0037_drop_worker_idle_outbox.sql` | `2f6d98f272afa2cd9ea142511fe3a9197d94d2c6` | `0038_drop_worker_idle_outbox.sql` | `abf41789032c9a9bc25e21364d07d3c19dc3ad5e76a6e327e195a87f32947342` |
-| `0038_orchestrator_reengagement.sql` | `c5523a6d0e51251b79555b95ddc7d2be59da0f50` | `0040_orchestrator_reengagement.sql` | `f2b14364b6abad489e941dac5c9e40e2678c8f5054ddfcd734ff7d09ad6db3ca` |
+| `0038_orchestrator_reengagement.sql` | `79a70e82fa455824568e25b9530a8e2241314cec` | `0040_orchestrator_reengagement.sql` | `f2b14364b6abad489e941dac5c9e40e2678c8f5054ddfcd734ff7d09ad6db3ca` |
 | `0039_drop_orchestrator_reengagement.sql` | `ef4d6c124226c715bef3d02777b89bf201dd4b96` | `0042_drop_orchestrator_reengagement.sql` | `01b2baa49b6fcc0c461f05e8b8bcf07a7f971ff8fcaee80425b53d0c8b752cf4` |
 | `0040_add_session_diff_base.sql` | `e8cc5f3e2689a698a38504a99fe773a04af240e5` | `0043_add_session_diff_base.sql` | `1b1001d774bcb30aec24de8803bac0090b12c1fa3252d8f9b45ed74e0f9596f9` |
 | `0041_notification_resolution.sql` | `1bd62cdfdd14cdd286e985be1528fa264d1659e2` | `0044_notification_resolution.sql` | `4aed8877163cd39674716564262376449a3a61a5959468e6c33d2b308c34e112` |
@@ -19,34 +45,28 @@ next unused fork version without changing its contents.
 | `0043_add_session_pinned.sql` | `bfb69fbe7f362d7a142576eb374b756c7d177992` | `0046_add_session_pinned.sql` | `bfb32829e648bf051051d88b85fd8c459b95cd87b485d2b7f211043936427a68` |
 | `0044_backfill_review_run_batch_id.sql` | `ad153c1f5630dd7c0191e14a9d72c0c31fa0dd9e` | `0047_backfill_review_run_batch_id.sql` | `e8263c0522e9c1946fc550cc0cc4223abf87268882ee512d06b18c9c80361598` |
 | `0047_agent_model_catalog.sql` | `4babacf95e8ac54595f2a21849762f82263452c1` | `0048_agent_model_catalog.sql` | `cafb59d968d0941e04219dfabefc7e8440cbfb51ef4695be9904361e2bb9c4da` |
+| `0048_review_agent_session_id.sql` | `d15fd8277c1b63a1a7ebdb55735b9ed6091cf118` | `0050_review_agent_session_id.sql` | `440eac3ebdd773e4fa70824d5137ac3b1704d706618d7d947da88407c6d23a7e` |
+| `0049_review_per_harness.sql` | `d15fd8277c1b63a1a7ebdb55735b9ed6091cf118` | `0051_review_per_harness.sql` | `720fb0658b813368d3ae9aab914634c85638582207f6f506fa9139a21527ff1a` |
+| `0052_model_usage.sql` | `ae0541324accf9f91f8f7de48ebafa2b5692ce36` | `0052_model_usage.sql` | `949759bf63f657c3caf137e4c771d0ae8b9f0390a050278e3a22e7421726cacd` |
+| `0053_allow_muse_harness.sql` | `ef8cdb30938b13c49e0837e87a3a44a4af9bc116` | `0053_allow_muse_harness.sql` | `c2b51ab364ad16adb55fc8a3ec96bc64799b525413ab22b7699c7b6dfd1cad78` |
+| `0066_chat_session_mode.sql` | `7239bb95383c55be391c19ff749b71153eb554c1` | `0066_chat_session_mode.sql` | `ead224c711003cd908e541877da7471ae9543d677c27f384a3e653fefc337f4c` |
+| `0067_app_settings.sql` | `7239bb95383c55be391c19ff749b71153eb554c1` | `0067_app_settings.sql` | `9ea7872219ca96f87c912238b486ae4e9436d6f0512460085a7b4130f614e128` |
+| `0068_conversation_turn_settings.sql` | `7239bb95383c55be391c19ff749b71153eb554c1` | `0068_conversation_turn_settings.sql` | `682d992e547853c18ba339840ee30c0c388b1d13ad2bafa90676be6c64ba1b75` |
+| `0069_conversation_compaction.sql` | `7239bb95383c55be391c19ff749b71153eb554c1` | `0069_conversation_compaction.sql` | `033e8e43c907d00095e99697d38bdaf0fe89df93964cc96338aec551a2eaa724` |
+| `0070_command_output_and_diffs.sql` | `7239bb95383c55be391c19ff749b71153eb554c1` | `0070_command_output_and_diffs.sql` | `4a5adf4785c577b4797a59eeeb0c079da39036d383321046d51c7d2677fc4023` |
+| `0071_conversation_usage.sql` | `7239bb95383c55be391c19ff749b71153eb554c1` | `0071_conversation_usage.sql` | `fd9b70757705d1a1d08526ac55405f50307e3967f7fbacf0b8c57e8ba77dd388` |
+| `0072_conversation_history_ops.sql` | `7239bb95383c55be391c19ff749b71153eb554c1` | `0072_conversation_history_ops.sql` | `5d50117620407028b172426528689ce4bd4e417a9739b8d60f9293a77621734a` |
+| `0073_conversation_provider_state.sql` | `7239bb95383c55be391c19ff749b71153eb554c1` | `0073_conversation_provider_state.sql` | `6c89428ef2da5254d0153c7cb61409e737a1fdafe4509708426a2611552bd5a1` |
+| `0074_activity_kinds_mcp_and_auto_review.sql` | `7239bb95383c55be391c19ff749b71153eb554c1` | `0074_activity_kinds_mcp_and_auto_review.sql` | `1271188877dc4c4bfb2545fb69d59d2b98042b90d5b408c08d207a17e571559d` |
+| `0075_conversation_user_input.sql` | `7239bb95383c55be391c19ff749b71153eb554c1` | `0075_conversation_user_input.sql` | `f01ae95ce6a6e972fe908ed13220f5540c8533f7ef17b2778aa8ba57236bb08d` |
+| `0076_conversation_delivery_content_and_cost.sql` | `7239bb95383c55be391c19ff749b71153eb554c1` | `0076_conversation_delivery_content_and_cost.sql` | `cf9ad10d23b4e2bf2ae6f851a4e6c65cd040f6cd9a5f84ce977bbc67d312e5f6` |
+| `0077_cancelled_conversation_activities.sql` | `7239bb95383c55be391c19ff749b71153eb554c1` | `0077_cancelled_conversation_activities.sql` | `8a694770a46859808ccf5e806fd351157723d02ee4c213562dded8797cc5be16` |
+| `0078_session_interface_transitions.sql` | `7239bb95383c55be391c19ff749b71153eb554c1` | `0078_session_interface_transitions.sql` | `b85f520fbd8e3ba5fee20e641e24f6ba2166ff65950c1a8b88838050eb681113` |
+| `0079_session_interface_transition_delivery.sql` | `7239bb95383c55be391c19ff749b71153eb554c1` | `0079_session_interface_transition_delivery.sql` | `6fa09d17110e5c897d1fc8f9e4eed932737e25de78ccb57e68979e87fd239cca` |
+| `0080_review_per_harness.sql` | `d15fd8277c1b63a1a7ebdb55735b9ed6091cf118` | `0080_review_per_harness.sql` | `56b280912add643b94a34e1a323f458e06ca900b93bc9076e3a37cf515ef3387` |
+| `0081_browser_capability_verifier.sql` | `c9e1c676baee8ab2e860a8110f2539a460e73a11` | `0081_browser_capability_verifier.sql` | `aef4c4efb367a2b15a4e2d78a6c9d03543c73359573e7308e0e6d8758880676a` |
+| `0082_allow_prime_agent_harness.sql` | `6c72814f9849e95ad85fe42e88fee1c540d590ad` | `0082_allow_prime_agent_harness.sql` | `36dc2d339db5f10106188a94afd33dea7a5560fd25d6047c8cea586864a90e25` |
 
-The source and fork files in each row must remain byte-identical. Verification
-checks the content hash, uniqueness of the numeric fork versions, fresh schema
-creation, and upgrade from both upstream and fork database histories.
-
-The workstation compatibility lineage deployed a different immutable `0040`,
-`0040_add_session_launch_permissions.sql`, before this baseline was merged.
-Those databases therefore skip `0040_orchestrator_reengagement.sql` by version
-even though its table is absent. Migration
-`0041_repair_orchestrator_reengagement.sql` idempotently converges both
-histories: it is a no-op after the mapped upstream `0040`, and creates the
-missing table and indexes after the deployed calibration `0040`. Its down path
-intentionally preserves the table because logical ownership remains with
-`0040` on fresh databases.
-
-The explicitly authorized upstream `main` snapshot later removes the table
-through mapped migration `0042`; the repair remains necessary so every shipped
-fork history first converges before that idempotent removal. Mapped migrations
-`0043` and `0044` then add diff-base and notification-resolution facts.
-
-The v0.12.1 release reuses fork versions `0042`, `0043`, and `0044` for new
-review and session facts, and uses `0047` for the model catalog. Those four
-release files are preserved byte-for-byte under fork versions `0045` through
-`0048` above.
-
-The append-only v0.12.1 lineage reconciliation uses `0049`; the next unused
-`0049_reconcile_v0121_native_lineage.sql` has SHA-256
-`c16feb4ae9cf674163f81b81ac24a44de9fbb96ee297474773fa8968a6ee3247` and
-bridges the native v0.12.1 version rows without modifying any shipped
-migration. The next unused fork migration version is `0050`. Future upstream migrations
-are mapped only as part of another explicitly pinned baseline synchronization.
+The candidate has exactly one migration filename per numeric version. The
+observed upstream `main` migrations after `v0.12.2` are outside this stable
+baseline and are not reserved or cherry-picked here.
