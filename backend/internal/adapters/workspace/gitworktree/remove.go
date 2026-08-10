@@ -92,7 +92,9 @@ func removeAllWithRetry(ctx context.Context, path string) error {
 	if errors.Is(err, os.ErrPermission) {
 		repaired, repairErr := makeOwnerDirectoriesWritable(path)
 		if repairErr != nil {
-			return errors.Join(err, repairErr)
+			// Preserve the original, user-facing removal failure. Some OS
+			// traversal sentinels are intentionally not formattable errors.
+			return err
 		}
 		if repaired {
 			if err = removeAll(path); err == nil || errors.Is(err, os.ErrNotExist) {

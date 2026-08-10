@@ -20,7 +20,9 @@ func makeOwnerDirectoriesWritable(root string) (bool, error) {
 		if walkErr != nil {
 			return walkErr
 		}
-		if !entry.IsDir() {
+		// Check the entry's own type before IsDir. A symlink may target a
+		// directory, but permission repair must never open or chmod that target.
+		if entry.Type()&fs.ModeSymlink != 0 || !entry.IsDir() {
 			return nil
 		}
 
