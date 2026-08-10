@@ -36,7 +36,7 @@ INSERT INTO projects (
 		t.Fatalf("seed project: %v", err)
 	}
 	if _, err := db.Exec(
-		`INSERT INTO goose_db_version (version_id, is_applied) VALUES (48, 1)`,
+		`INSERT INTO goose_db_version (version_id, is_applied) VALUES (50, 1)`,
 	); err != nil {
 		t.Fatalf("seed later migration version: %v", err)
 	}

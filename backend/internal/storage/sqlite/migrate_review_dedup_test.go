@@ -136,7 +136,7 @@ func TestMigration0080MovesReviewerSessionsIntoPerHarnessReviewRows(t *testing.T
 	}
 	t.Cleanup(func() { _ = db.Close() })
 
-	upTo(t, db, 48)
+	upTo(t, db, 50)
 	if _, err := db.Exec(`PRAGMA foreign_keys = OFF`); err != nil {
 		t.Fatalf("disable foreign keys for review-only fixture: %v", err)
 	}
@@ -155,7 +155,7 @@ INSERT INTO review_session (
 	'session-1', 'project-1', 'opencode', 'opencode-handle',
 	'opencode-agent-session', '2026-08-02T00:00:00Z', '2026-08-02T00:00:00Z'
 );`); err != nil {
-		t.Fatalf("seed 0048 review state: %v", err)
+		t.Fatalf("seed 0050 review state: %v", err)
 	}
 
 	upTo(t, db, 80)
@@ -232,7 +232,7 @@ CREATE TABLE goose_db_version (
 	is_applied INTEGER NOT NULL,
 	tstamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
 );
-INSERT INTO goose_db_version (version_id, is_applied) VALUES (48, 1), (49, 1), (80, 1);
+INSERT INTO goose_db_version (version_id, is_applied) VALUES (50, 1), (51, 1), (80, 1);
 CREATE TABLE projects (
 	id TEXT PRIMARY KEY
 );
