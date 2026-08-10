@@ -17,6 +17,7 @@ Start with [architecture.md](architecture.md) for the current backend model and
 | [cli/README.md](cli/README.md)                         | CLI commands and daemon control surface.                                                                              |
 | [development.md](development.md)                       | Prerequisites, build steps, running tests, and troubleshooting for local development.                                 |
 | [STATUS.md](STATUS.md)                                 | What is shipped on `main` today and what is still in flight.                                                          |
+| [v0.12.2-sync-verification.md](v0.12.2-sync-verification.md) | Exact v0.12.2 synchronization inputs, validation evidence, and remaining gates. |
 | [stack.md](stack.md)                                   | Accepted library/runtime choices, pending stack decisions, and dependencies explicitly avoided for V1.                |
 | [telemetry.md](telemetry.md)                           | Telemetry collection, privacy safeguards, configuration, and PostHog dashboard guidance.                              |
 | [posthog-cost-controls.md](posthog-cost-controls.md)   | PostHog event-name migration, ingestion drop rules, and dashboard queries for reducing telemetry spend.              |
