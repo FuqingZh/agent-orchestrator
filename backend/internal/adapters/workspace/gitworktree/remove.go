@@ -89,7 +89,7 @@ func removeAllWithRetry(ctx context.Context, path string) error {
 	// Repair only real directories owned by this process; the platform helper
 	// opens them without following symlinks, so links into system libraries are
 	// removed as links and their targets are never chmod'd.
-	if errors.Is(err, os.ErrPermission) {
+	if needsOwnerPermissionRepair(err) {
 		repaired, repairErr := makeOwnerDirectoriesWritable(path)
 		if repairErr != nil {
 			// Preserve the original, user-facing removal failure. Some OS
@@ -129,4 +129,18 @@ func removeAllWithRetry(ctx context.Context, path string) error {
 		}
 	}
 	return err
+}
+
+// needsOwnerPermissionRepair recognizes both ordinary permission failures and
+// Go 1.25's RemoveAll error shape for a symlink inside a non-writable parent.
+// That implementation returns a PathError with Op "openfdat" wrapping an
+// internal os.errSymlink sentinel instead of wrapping fs.ErrPermission. The
+// sentinel's Error method is deliberately not user-visible, so classify it by
+// the public PathError operation without formatting the error chain.
+func needsOwnerPermissionRepair(err error) bool {
+	if errors.Is(err, os.ErrPermission) {
+		return true
+	}
+	var pathErr *os.PathError
+	return errors.As(err, &pathErr) && pathErr.Op == "openfdat"
 }
