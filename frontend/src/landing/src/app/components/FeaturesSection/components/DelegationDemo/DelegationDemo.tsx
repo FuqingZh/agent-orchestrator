@@ -1,6 +1,6 @@
 "use client";
 
-import { AnimatePresence, domAnimation, LazyMotion, m, motion } from "motion/react";
+import { AnimatePresence, domAnimation, LazyMotion, m } from "motion/react";
 import { GeistMono } from "geist/font/mono";
 import {
 	Bell,
@@ -15,6 +15,7 @@ import {
 } from "lucide-react";
 import type { CSSProperties, ReactNode, RefObject } from "react";
 import { useCallback, useEffect, useRef, useState } from "react";
+import Image from "next/image";
 import { usePreviewScale } from "../usePreviewScale";
 
 const previewTokens = {
@@ -990,7 +991,7 @@ function PreviewSidebar({
 				</div>
 			</div>
 			<div className="flex shrink-0 items-center gap-1.5 px-3 pb-2">
-				<img src="/ao-logo.svg" alt="" className="size-[18px] shrink-0 rounded-md" draggable={false} />
+				<Image src="/ao-logo.svg" alt="" width={18} height={18} className="size-[18px] shrink-0 rounded-md" draggable={false} />
 				<span className="truncate text-sm font-semibold tracking-tight text-[var(--preview-foreground)]">Agent Orchestrator</span>
 			</div>
 			<div className="flex shrink-0 flex-col px-2">
@@ -1042,9 +1043,10 @@ function PreviewSidebar({
 									{showSessions ? (
 										<m.div
 											key={`${project.id}-sessions`}
-											initial={{ height: 0 }}
-											animate={{ height: "auto" }}
-											exit={{ height: 0 }}
+											layout
+											initial={{ opacity: 0 }}
+											animate={{ opacity: 1 }}
+											exit={{ opacity: 0 }}
 											transition={{ duration: 0.14, ease: [0.25, 0.46, 0.45, 0.94] }}
 											style={{ overflow: "hidden" }}
 										>
@@ -1169,7 +1171,7 @@ function PreviewTopbar({
 		<div className="flex h-9 shrink-0 items-stretch border-b border-[var(--preview-border)] bg-[var(--preview-background)]">
 			<div className="flex min-w-0 flex-1 items-center">
 				<span className="relative inline-flex min-w-0 shrink-0 self-stretch items-center gap-1.5 border-r border-[var(--preview-border)] bg-[var(--preview-overlay)] px-2.5 after:absolute after:inset-x-0 after:-bottom-px after:h-px after:bg-[#fafafa]">
-					<img src={meta.icon} alt="" aria-hidden="true" className="size-[13px] shrink-0 object-contain" draggable={false} />
+					<Image src={meta.icon} alt="" aria-hidden="true" width={13} height={13} className="size-[13px] shrink-0 object-contain" draggable={false} />
 					<span className="inline-flex min-w-0 items-center gap-1.5 text-[10.5px] font-medium leading-none text-[var(--preview-foreground)]">
 						<span className="truncate">{meta.tabLabel}</span>
 						<span
@@ -1227,7 +1229,7 @@ function TerminalPane({
 			style={{ fontFamily: "var(--font-geist-mono), ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, Liberation Mono, monospace", fontVariantEmoji: "text" }}
 		>
 			<div className="mb-2 flex items-start gap-2">
-				<img src={meta.icon} alt="" aria-hidden="true" className="mt-0.5 size-[22px] shrink-0" draggable={false} />
+				<Image src={meta.icon} alt="" aria-hidden="true" width={22} height={22} className="mt-0.5 size-[22px] shrink-0" draggable={false} />
 				<div className="min-w-0 text-[10px] leading-[1.5]">
 					<div>
 						<span className="font-bold text-[var(--preview-terminal-fg)]">{meta.title}</span>
@@ -1332,14 +1334,14 @@ function DemoCursor({
 	}, [rootRef, target]);
 
 	return (
-		<motion.div
+		<m.div
 			className="pointer-events-none absolute z-40"
 			initial={false}
-			animate={{ left: `${pos.x}%`, top: `${pos.y}%` }}
+			layout="position"
 			transition={{ type: "spring", stiffness: 240, damping: 30, mass: 0.8 }}
-			style={{ width: 0, height: 0 }}
+			style={{ width: 0, height: 0, left: `${pos.x}%`, top: `${pos.y}%` }}
 		>
-			<motion.div animate={{ scale: pressed ? 0.86 : 1 }} transition={{ duration: 0.12 }}>
+			<m.div animate={{ scale: pressed ? 0.86 : 1 }} transition={{ duration: 0.12 }}>
 				<svg
 					width="14"
 					height="14"
@@ -1355,10 +1357,10 @@ function DemoCursor({
 						strokeLinejoin="round"
 					/>
 				</svg>
-			</motion.div>
+			</m.div>
 			<AnimatePresence>
 				{pressed ? (
-					<motion.span
+					<m.span
 						key="click-ring"
 						initial={{ opacity: 0.9, scale: 0.25 }}
 						animate={{ opacity: 0, scale: 1.55 }}
@@ -1368,6 +1370,6 @@ function DemoCursor({
 					/>
 				) : null}
 			</AnimatePresence>
-		</motion.div>
+		</m.div>
 	);
 }

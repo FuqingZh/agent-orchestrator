@@ -1,6 +1,6 @@
 "use client";
 
-import { AnimatePresence, domAnimation, LazyMotion, m, motion } from "motion/react";
+import { AnimatePresence, domAnimation, LazyMotion, m } from "motion/react";
 import { GeistMono } from "geist/font/mono";
 import {
 	ArrowUpRight,
@@ -467,14 +467,14 @@ function DemoCursor({ rootRef, target, pressed }: { rootRef: React.RefObject<HTM
 	}, [rootRef, target]);
 
 	return (
-		<motion.div
+		<m.div
 			className="pointer-events-none absolute z-40"
 			initial={false}
-			animate={{ left: `${pos.x}%`, top: `${pos.y}%` }}
+			layout="position"
 			transition={{ type: "spring", stiffness: 240, damping: 30, mass: 0.8 }}
-			style={{ width: 0, height: 0 }}
+			style={{ width: 0, height: 0, left: `${pos.x}%`, top: `${pos.y}%` }}
 		>
-			<motion.div animate={{ scale: pressed ? 0.86 : 1 }} transition={{ duration: 0.12 }}>
+			<m.div animate={{ scale: pressed ? 0.86 : 1 }} transition={{ duration: 0.12 }}>
 				<svg
 					width="14"
 					height="14"
@@ -490,10 +490,10 @@ function DemoCursor({ rootRef, target, pressed }: { rootRef: React.RefObject<HTM
 						strokeLinejoin="round"
 					/>
 				</svg>
-			</motion.div>
+			</m.div>
 			<AnimatePresence>
 				{pressed ? (
-					<motion.span
+					<m.span
 						key="click-ring"
 						initial={{ opacity: 0.9, scale: 0.25 }}
 						animate={{ opacity: 0, scale: 1.55 }}
@@ -503,7 +503,7 @@ function DemoCursor({ rootRef, target, pressed }: { rootRef: React.RefObject<HTM
 					/>
 				) : null}
 			</AnimatePresence>
-		</motion.div>
+		</m.div>
 	);
 }
 

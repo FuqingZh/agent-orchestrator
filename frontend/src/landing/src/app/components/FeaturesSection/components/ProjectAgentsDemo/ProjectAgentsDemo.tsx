@@ -1,6 +1,6 @@
 "use client";
 
-import { AnimatePresence, LayoutGroup, motion } from "motion/react";
+import { AnimatePresence, domAnimation, LayoutGroup, LazyMotion, m } from "motion/react";
 import { ChevronDown, X } from "lucide-react";
 import Image from "next/image";
 import { useEffect, useRef, useState } from "react";
@@ -56,14 +56,14 @@ const PHASE_TRANSITION = {
 /* ------------------------------------------------------------------ */
 function DemoCursor({ x, y, pressed, clickId }: { x: number; y: number; pressed: boolean; clickId: number }) {
 	return (
-		<motion.div
+		<m.div
 			className="pointer-events-none absolute z-40"
 			initial={false}
-			animate={{ left: `${x}%`, top: `${y}%` }}
+			layout="position"
 			transition={{ type: "spring", stiffness: 240, damping: 30, mass: 0.8 }}
-			style={{ width: 0, height: 0 }}
+			style={{ width: 0, height: 0, left: `${x}%`, top: `${y}%` }}
 		>
-			<motion.div animate={{ scale: pressed ? 0.86 : 1 }} transition={{ duration: 0.16 }}>
+			<m.div animate={{ scale: pressed ? 0.86 : 1 }} transition={{ duration: 0.16 }}>
 				<svg
 					width="18"
 					height="18"
@@ -79,10 +79,10 @@ function DemoCursor({ x, y, pressed, clickId }: { x: number; y: number; pressed:
 						strokeLinejoin="round"
 					/>
 				</svg>
-			</motion.div>
+			</m.div>
 			<AnimatePresence>
 				{clickId > 0 ? (
-					<motion.span
+					<m.span
 						key={clickId}
 						initial={{ opacity: 0.9, scale: 0.25 }}
 						animate={{ opacity: 0, scale: 1.55 }}
@@ -93,7 +93,7 @@ function DemoCursor({ x, y, pressed, clickId }: { x: number; y: number; pressed:
 					/>
 				) : null}
 			</AnimatePresence>
-		</motion.div>
+		</m.div>
 	);
 }
 
@@ -118,7 +118,7 @@ function AgentMenu({ currentValue, hoverId }: { currentValue: string; hoverId: s
 	}, [hoverId]);
 
 	return (
-		<motion.div
+		<m.div
 			data-cursor-target="agent-menu"
 			initial={{ opacity: 0, y: -4, scale: 0.98 }}
 			animate={{ opacity: 1, y: 0, scale: 1 }}
@@ -164,7 +164,7 @@ function AgentMenu({ currentValue, hoverId }: { currentValue: string; hoverId: s
 					);
 				})}
 			</div>
-		</motion.div>
+		</m.div>
 	);
 }
 
@@ -200,11 +200,11 @@ function NewTaskModal({ scene }: { scene: ProjectAgentsScene }) {
 	const showCaret = charCount < TASK_TEXT_FULL.length && scene.phase === "modal";
 
 	return (
-		<motion.div
+		<m.div
 			className="absolute inset-0 z-20 flex items-center justify-center"
 			{...PHASE_TRANSITION}
 		>
-			<motion.div
+			<m.div
 				data-cursor-target="modal"
 				className="relative w-[min(420px,calc(100%-32px))] rounded-[12px]"
 				style={{
@@ -292,17 +292,17 @@ function NewTaskModal({ scene }: { scene: ProjectAgentsScene }) {
 						>
 							Cancel
 						</span>
-						<motion.span
-							data-cursor-target="start-button"
-							layout
-							className="inline-flex h-[28px] items-center justify-center gap-1.5 overflow-hidden rounded-md text-[11px] font-medium"
-							animate={{ paddingLeft: scene.busy ? 14 : 12, paddingRight: scene.busy ? 14 : 12, opacity: scene.busy ? 0.65 : 1 }}
+						<m.span
+			data-cursor-target="start-button"
+			layout
+			className="inline-flex h-[28px] items-center justify-center gap-1.5 overflow-hidden rounded-md text-[11px] font-medium"
+							animate={{ opacity: scene.busy ? 0.65 : 1 }}
 							transition={{ duration: 0.2, ease: [0.4, 0, 0.2, 1] }}
-							style={{ background: T.fg, color: T.bg }}
+							style={{ background: T.fg, color: T.bg, paddingLeft: scene.busy ? 14 : 12, paddingRight: scene.busy ? 14 : 12 }}
 						>
 							<AnimatePresence mode="wait" initial={false}>
 								{scene.busy ? (
-									<motion.span
+									<m.span
 										key="starting"
 										initial={{ opacity: 0, filter: "blur(4px)" }}
 										animate={{ opacity: 1, filter: "blur(0px)" }}
@@ -312,9 +312,9 @@ function NewTaskModal({ scene }: { scene: ProjectAgentsScene }) {
 									>
 										<span className="size-3 shrink-0 animate-spin rounded-full border-[1.5px] border-current border-t-transparent" />
 										Starting…
-									</motion.span>
+									</m.span>
 								) : (
-									<motion.span
+									<m.span
 										key="start"
 										initial={{ opacity: 0, filter: "blur(4px)" }}
 										animate={{ opacity: 1, filter: "blur(0px)" }}
@@ -322,14 +322,14 @@ function NewTaskModal({ scene }: { scene: ProjectAgentsScene }) {
 										transition={{ duration: 0.15 }}
 									>
 										Start
-									</motion.span>
+									</m.span>
 								)}
 							</AnimatePresence>
-						</motion.span>
+						</m.span>
 					</div>
 				</div>
-			</motion.div>
-		</motion.div>
+			</m.div>
+		</m.div>
 	);
 }
 
@@ -367,7 +367,7 @@ const COLUMN_CONFIG: { id: string; title: string; color: string }[] = [
 
 function BoardCard({ card }: { card: BoardCardData }) {
 	return (
-		<motion.div
+		<m.div
 			data-cursor-target="board-card"
 			initial={{ opacity: 0, scale: 0.96, y: -8 }}
 			animate={{ opacity: 1, scale: 1, y: 0 }}
@@ -393,7 +393,7 @@ function BoardCard({ card }: { card: BoardCardData }) {
 				<span className="size-2.5 shrink-0 animate-spin rounded-full border border-[#4b5563] border-t-[#d1d5db]" />
 				<span className="truncate">{card.activity}</span>
 			</div>
-		</motion.div>
+		</m.div>
 	);
 }
 
@@ -427,13 +427,17 @@ export function ProjectAgentsDemo() {
 	const { viewportRef, viewportStyle, canvasStyle } = usePreviewScale(PREVIEW_WIDTH, PREVIEW_HEIGHT);
 	const [sceneIndex, setSceneIndex] = useState(0);
 	const [cursor, setCursor] = useState({ x: 50, y: 50 });
-	const [reducedMotion] = useState(
-		() =>
-			typeof window !== "undefined" &&
-			window.matchMedia("(prefers-reduced-motion: reduce)").matches,
-	);
+	const [reducedMotion, setReducedMotion] = useState(false);
 	const scene = PROJECT_AGENT_SCENES[sceneIndex] ?? PROJECT_AGENT_SCENES[0]!;
 	const clockKey = sceneClockKey(scene);
+
+	useEffect(() => {
+		const media = window.matchMedia("(prefers-reduced-motion: reduce)");
+		const update = () => setReducedMotion(media.matches);
+		update();
+		media.addEventListener("change", update);
+		return () => media.removeEventListener("change", update);
+	}, []);
 
 	useEffect(() => {
 		const node = rootRef.current;
@@ -501,59 +505,63 @@ export function ProjectAgentsDemo() {
 
 	if (reducedMotion) {
 		return (
+			<LazyMotion features={domAnimation}>
+				<div
+					ref={viewportRef}
+					className="relative w-full min-w-0 max-w-[570px]"
+					style={viewportStyle}
+					role="img"
+					aria-label="New task dialog with task description and agent selection."
+				>
+					<div
+						className="absolute left-0 top-0 overflow-visible rounded-[18px]"
+						style={{ ...featurePreviewTokens, ...canvasStyle, fontFamily: "var(--font-geist-sans), ui-sans-serif, system-ui, sans-serif" }}
+					>
+						<NewTaskModal scene={{ ...PROJECT_AGENT_SCENES[1]!, typedChars: TASK_TEXT_FULL.length, typing: false }} />
+					</div>
+				</div>
+			</LazyMotion>
+		);
+	}
+
+	return (
+		<LazyMotion features={domAnimation}>
 			<div
 				ref={viewportRef}
 				className="relative w-full min-w-0 max-w-[570px]"
 				style={viewportStyle}
 				role="img"
-				aria-label="New task dialog with task description and agent selection."
+				aria-label="Demo: creating a new task and seeing it appear on the board."
 			>
 				<div
-					className="absolute left-0 top-0 overflow-visible rounded-[18px]"
+					ref={rootRef}
+					className="absolute left-0 top-0 select-none overflow-visible rounded-[18px]"
 					style={{ ...featurePreviewTokens, ...canvasStyle, fontFamily: "var(--font-geist-sans), ui-sans-serif, system-ui, sans-serif" }}
 				>
-					<NewTaskModal scene={{ ...PROJECT_AGENT_SCENES[1]!, typedChars: TASK_TEXT_FULL.length, typing: false }} />
-				</div>
+					<div className="pointer-events-none absolute inset-0">
+						<AnimatePresence mode="wait">
+							{scene.phase === "board" && scene.id !== "reset" ? (
+								<m.div
+									key="board"
+									{...PHASE_TRANSITION}
+									className="absolute inset-0 p-3"
+								>
+									<BoardView card={createdCard} />
+								</m.div>
+							) : null}
+							{scene.phase === "modal" && scene.id !== "reset" ? (
+								<NewTaskModal key="modal" scene={scene} />
+							) : null}
+						</AnimatePresence>
+						</div>
+						<DemoCursor
+							x={cursor.x}
+							y={cursor.y}
+							pressed={scene.click === true}
+							clickId={scene.click ? sceneIndex : 0}
+						/>
+					</div>
 			</div>
-		);
-	}
-
-	return (
-		<div
-			ref={viewportRef}
-			className="relative w-full min-w-0 max-w-[570px]"
-			style={viewportStyle}
-			role="img"
-			aria-label="Demo: creating a new task and seeing it appear on the board."
-		>
-			<div
-				ref={rootRef}
-				className="absolute left-0 top-0 select-none overflow-visible rounded-[18px]"
-				style={{ ...featurePreviewTokens, ...canvasStyle, fontFamily: "var(--font-geist-sans), ui-sans-serif, system-ui, sans-serif" }}
-			>
-				<div className="pointer-events-none absolute inset-0">
-					<AnimatePresence mode="wait">
-						{scene.phase === "board" && scene.id !== "reset" ? (
-							<motion.div
-								key="board"
-								{...PHASE_TRANSITION}
-								className="absolute inset-0 p-3"
-							>
-								<BoardView card={createdCard} />
-							</motion.div>
-						) : null}
-						{scene.phase === "modal" && scene.id !== "reset" ? (
-							<NewTaskModal key="modal" scene={scene} />
-						) : null}
-					</AnimatePresence>
-				</div>
-				<DemoCursor
-					x={cursor.x}
-					y={cursor.y}
-					pressed={scene.click === true}
-					clickId={scene.click ? sceneIndex : 0}
-				/>
-			</div>
-		</div>
+		</LazyMotion>
 	);
 }
