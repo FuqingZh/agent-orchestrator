@@ -94,29 +94,22 @@ type trackerIntakeConfig struct {
 	Assignee string `json:"assignee,omitempty"`
 }
 
-// botReviewFeedbackConfig mirrors domain.BotReviewFeedbackConfig.
-type botReviewFeedbackConfig struct {
-	AllowAuthors []string `json:"allowAuthors,omitempty"`
-	DenyAuthors  []string `json:"denyAuthors,omitempty"`
-}
-
 // projectConfig mirrors the daemon's typed domain.ProjectConfig for the CLI
 // client. The CLI sets common fields via flags and the whole object via
 // --config-json.
 type projectConfig struct {
-	DefaultBranch     string                  `json:"defaultBranch,omitempty"`
-	SessionPrefix     string                  `json:"sessionPrefix,omitempty"`
-	Env               map[string]string       `json:"env,omitempty"`
-	Symlinks          []string                `json:"symlinks,omitempty"`
-	PostCreate        []string                `json:"postCreate,omitempty"`
-	AgentRules        string                  `json:"agentRules,omitempty"`
-	AgentRulesFile    string                  `json:"agentRulesFile,omitempty"`
-	OrchestratorRules string                  `json:"orchestratorRules,omitempty"`
-	AgentConfig       agentConfig             `json:"agentConfig,omitempty"`
-	Worker            roleOverride            `json:"worker,omitempty"`
-	Orchestrator      roleOverride            `json:"orchestrator,omitempty"`
-	TrackerIntake     trackerIntakeConfig     `json:"trackerIntake,omitempty"`
-	BotReviewFeedback botReviewFeedbackConfig `json:"botReviewFeedback,omitempty"`
+	DefaultBranch     string              `json:"defaultBranch,omitempty"`
+	SessionPrefix     string              `json:"sessionPrefix,omitempty"`
+	Env               map[string]string   `json:"env,omitempty"`
+	Symlinks          []string            `json:"symlinks,omitempty"`
+	PostCreate        []string            `json:"postCreate,omitempty"`
+	AgentRules        string              `json:"agentRules,omitempty"`
+	AgentRulesFile    string              `json:"agentRulesFile,omitempty"`
+	OrchestratorRules string              `json:"orchestratorRules,omitempty"`
+	AgentConfig       agentConfig         `json:"agentConfig,omitempty"`
+	Worker            roleOverride        `json:"worker,omitempty"`
+	Orchestrator      roleOverride        `json:"orchestrator,omitempty"`
+	TrackerIntake     trackerIntakeConfig `json:"trackerIntake,omitempty"`
 }
 
 // setConfigRequest mirrors the daemon's SetConfigInput body for
@@ -139,7 +132,6 @@ type projectSetConfigOptions struct {
 	symlink           []string
 	postCreate        []string
 	trackerIntake     bool
-	trackerProvider   string
 	trackerRepo       string
 	trackerAssignee   string
 	configJSON        string
@@ -330,10 +322,9 @@ func newProjectSetConfigCommand(ctx *commandContext) *cobra.Command {
 	f.StringArrayVar(&opts.env, "env", nil, "Env var KEY=VALUE forwarded into sessions (repeatable)")
 	f.StringArrayVar(&opts.symlink, "symlink", nil, "Repo-relative path to symlink into workspaces (repeatable)")
 	f.StringArrayVar(&opts.postCreate, "post-create", nil, "Command to run after workspace creation (repeatable)")
-	f.BoolVar(&opts.trackerIntake, "tracker-intake", false, "Enable issue intake for matching tracker items")
-	f.StringVar(&opts.trackerProvider, "tracker-provider", "", "Tracker provider: github or linear (default: github)")
-	f.StringVar(&opts.trackerRepo, "tracker-repo", "", "Provider scope: GitHub owner/repo or Linear project UUID")
-	f.StringVar(&opts.trackerAssignee, "tracker-assignee", "", "Provider assignee ID, login, email, or name required for intake eligibility")
+	f.BoolVar(&opts.trackerIntake, "tracker-intake", false, "Enable GitHub issue intake for matching issues")
+	f.StringVar(&opts.trackerRepo, "tracker-repo", "", "GitHub repo for issue intake (owner/repo; default: derive from git origin)")
+	f.StringVar(&opts.trackerAssignee, "tracker-assignee", "", "GitHub issue assignee required for intake eligibility")
 	f.StringVar(&opts.configJSON, "config-json", "", "Full config as a JSON object (overrides field flags)")
 	f.BoolVar(&opts.clear, "clear", false, "Clear all config")
 	f.BoolVar(&opts.json, "json", false, "Output the updated project as JSON")
@@ -386,9 +377,6 @@ func buildProjectConfig(opts projectSetConfigOptions) (projectConfig, error) {
 }
 
 func trackerProviderForFlags(opts projectSetConfigOptions) string {
-	if provider := strings.ToLower(strings.TrimSpace(opts.trackerProvider)); provider != "" {
-		return provider
-	}
 	if opts.trackerIntake || opts.trackerRepo != "" || opts.trackerAssignee != "" {
 		return "github"
 	}

@@ -1,37 +1,26 @@
 # Downstream patch ledger
 
-Status: current for upstream `v0.12.1` commit
-`1df40e93772c2c48e916870d9c3ddf8f29a69f84`
+Status: archived for the direct upstream `v0.12.2` synchronization
 
-This ledger classifies every intentional runtime or test-harness difference
-between upstream `v0.12.1` and this fork. A downstream patch remains only while
-its contract is required and no stable upstream release supplies equivalent
-behavior.
+The fork-only runtime and test-harness changes below are preserved by
+`archive/fork-private-main-c55165a8` at
+`c55165a8b042715e6e613028d3d3039fff79d90f`. They are not selectively carried
+into the v0.12.2 runtime candidate. The archive branch is the recovery point;
+this ledger is only an index of what was deliberately left behind.
 
-| Patch | Status | Owned surface | Contract evidence | Retirement condition |
-| --- | --- | --- | --- | --- |
-| GitHub App installation tokens | retained | `adapters/githubappauth`, daemon GitHub wiring, Go dependencies | adapter and daemon wiring tests cover complete, partial, invalid, fallback, and refresh behavior | a stable upstream release supports installation tokens with the same fail-closed and fallback contract |
-| Linear credential isolation | retained | `runtime/runtimeenv`, tmux and ConPTY launch paths | unit and tmux integration tests prove `AO_LINEAR_API_KEY` and `AO_LINEAR_OAUTH_TOKEN` remain daemon-only | Linear credentials no longer enter the daemon environment or upstream supplies an equivalent worker boundary |
-| Read-only Linear intake | temporary | tracker domain/config, Linear adapter, tracker observer and CLI config | adapter, observer, daemon, and CLI tests cover project/assignee scoping, canonical identity, open-state filtering, deduplication, and no write path | an upstream stable release ships an equivalent Linear provider; compare first with #3319 or its accepted successor |
-| Bot review continuation | retained | project config, lifecycle reactions, SCM observation model | lifecycle and CLI round-trip tests cover allowlist, denylist, deduplication, edit handling, and bounded nudges | upstream routes configurable actionable bot feedback without treating all automation as human review |
-| Commented-review refresh | retained | SCM observer provider timestamp and thread semantic hashes | observer and integration tests cover provider-only updates and preservation of unrelated review state | upstream refreshes inline `COMMENTED` feedback on provider updates with equivalent polling bounds |
-| tmux integration-test isolation | retained test harness | `tmux_integration_test.go` | v0.12.1 integration tests still use the default tmux server and call `kill-server`; the fork assigns a test-scoped `TMUX_TMPDIR` | upstream isolates its integration tmux server from user sessions |
+| Archived patch | Former surface | Candidate disposition |
+| --- | --- | --- |
+| GitHub App installation tokens | `adapters/githubappauth`, daemon wiring, Go dependencies | archived; upstream v0.12.2 source is authoritative |
+| Linear credential isolation | `runtime/runtimeenv`, tmux and ConPTY launch paths | archived; upstream v0.12.2 source is authoritative |
+| Read-only Linear intake | tracker domain/config, adapter, observer, and CLI config | archived; upstream v0.12.2 source is authoritative |
+| Bot-review continuation | project config and lifecycle reactions | archived; upstream v0.12.2 source is authoritative |
+| Commented-review refresh | SCM observer provider timestamps and thread hashes | archived; upstream v0.12.2 source is authoritative |
+| tmux integration-test isolation | `tmux_integration_test.go` and test environment | archived; upstream v0.12.2 source is authoritative |
+| Symphony workflow scheduler | workflow issue-run runtime and state machine | retired and archived |
 
-The Symphony workflow scheduler and its runtime state machine are retired.
-Migrations `0037` and `0039` remain only because they have shipped; they do not
-authorize restoring the removed runtime. The long-prompt submission workaround
-is also retired: no runtime delta remains after merging upstream's accepted
-message-delivery implementation.
-
-Migration numbering is tracked separately in
-[`upstream-migration-map.md`](upstream-migration-map.md). Documentation,
-generated API artifacts, immutable migration history, and mechanical removal of
-trailing whitespace from an upstream SVG are not additional product patches.
-Migration `0041` is a schema-convergence repair for an already deployed fork
-version collision, not a new runtime capability.
-
-The v0.12.1 audit compared these owned surfaces against the exact release tag;
-the retained entries remain fork-only after the merge, while upstream supplies
-the shared lifecycle, review, notification, and model-catalog behavior. The
-Linear intake entry remains temporary because this release does not provide an
-equivalent read-only, project-scoped provider.
+Published SQLite migrations are the exception required by the repository
+contract. Their immutable files and the append-only reconciliation checks stay
+in the candidate solely so existing fork databases can upgrade; they do not
+authorize restoring the archived runtime behavior. See
+[`upstream-migration-map.md`](upstream-migration-map.md) for the exact source
+paths, destination paths, commits, and hashes.

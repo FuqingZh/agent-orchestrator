@@ -56,11 +56,6 @@ type ProjectConfig struct {
 	// tracker is not commented on or transitioned.
 	TrackerIntake TrackerIntakeConfig `json:"trackerIntake,omitempty"`
 
-	// BotReviewFeedback controls which bot-authored inline PR review comments
-	// are routed back to the owning agent. Empty lists allow any anchored bot
-	// review feedback; an allowlist narrows delivery, and the denylist wins.
-	BotReviewFeedback BotReviewFeedbackConfig `json:"botReviewFeedback,omitempty"`
-
 	// ContainerReap controls whether AO reaps a worker session's ao.session-
 	// labeled Docker containers on terminal state / kill. Enabled by default;
 	// set Disabled to opt a project out entirely. Per-container sparing uses
@@ -68,14 +63,6 @@ type ProjectConfig struct {
 	// opt-out travels with the container at `docker run` time rather than
 	// drifting out of sync with a project-config list.
 	ContainerReap ContainerReapConfig `json:"containerReap,omitempty"`
-}
-
-// BotReviewFeedbackConfig controls bot-authored inline PR review feedback
-// delivery. Author names are provider logins such as "github-actions" or
-// "react-doctor[bot]"; matching is case-insensitive.
-type BotReviewFeedbackConfig struct {
-	AllowAuthors []string `json:"allowAuthors,omitempty"`
-	DenyAuthors  []string `json:"denyAuthors,omitempty"`
 }
 
 // ContainerReapConfig is the project-level opt-out for #2652's Docker
@@ -98,15 +85,22 @@ type ReviewerConfig struct {
 const FallbackReviewerHarness = ReviewerClaudeCode
 
 // ResolveReviewerHarness picks the reviewer harness for a worker. A configured
-// reviewer wins. Otherwise the worker's own harness is reused when it is itself
-// a supported reviewer (e.g. a codex worker is reviewed by codex); a worker
-// whose harness is not a reviewer (e.g. crush) falls back to claude-code.
+// reviewer wins. Otherwise only the original, unattended-safe reviewer set is
+// inherited from the worker. Every other reviewer requires explicit selection,
+// so adding an experimental adapter never silently changes an existing project.
 func (c ProjectConfig) ResolveReviewerHarness(worker AgentHarness) ReviewerHarness {
 	if len(c.Reviewers) > 0 {
 		return c.Reviewers[0].Harness
 	}
-	if rh := ReviewerHarness(worker); rh.IsKnown() {
-		return rh
+	switch worker {
+	case HarnessClaudeCode:
+		return ReviewerClaudeCode
+	case HarnessCodex:
+		return ReviewerCodex
+	case HarnessOpenCode:
+		return ReviewerOpenCode
+	case HarnessMuse:
+		return ReviewerMuse
 	}
 	return FallbackReviewerHarness
 }
@@ -179,56 +173,7 @@ func (c ProjectConfig) Validate() error {
 	if err := c.TrackerIntake.Validate(); err != nil {
 		return err
 	}
-	if err := c.BotReviewFeedback.Validate(); err != nil {
-		return err
-	}
 	return nil
-}
-
-// AllowsAuthor reports whether bot-authored review feedback from author may be
-// delivered to the agent.
-func (c BotReviewFeedbackConfig) AllowsAuthor(author string) bool {
-	author = strings.TrimSpace(author)
-	if author == "" {
-		return false
-	}
-	if containsFold(c.DenyAuthors, author) {
-		return false
-	}
-	if len(c.AllowAuthors) > 0 {
-		return containsFold(c.AllowAuthors, author)
-	}
-	return true
-}
-
-// Validate rejects ambiguous author entries early when config is set.
-func (c BotReviewFeedbackConfig) Validate() error {
-	for i, author := range c.AllowAuthors {
-		if err := validateNoWhitespaceField(fmt.Sprintf("botReviewFeedback.allowAuthors[%d]", i), author); err != nil {
-			return err
-		}
-		if strings.TrimSpace(author) == "" {
-			return fmt.Errorf("botReviewFeedback.allowAuthors[%d]: must not be empty", i)
-		}
-	}
-	for i, author := range c.DenyAuthors {
-		if err := validateNoWhitespaceField(fmt.Sprintf("botReviewFeedback.denyAuthors[%d]", i), author); err != nil {
-			return err
-		}
-		if strings.TrimSpace(author) == "" {
-			return fmt.Errorf("botReviewFeedback.denyAuthors[%d]: must not be empty", i)
-		}
-	}
-	return nil
-}
-
-func containsFold(values []string, want string) bool {
-	for _, value := range values {
-		if strings.EqualFold(strings.TrimSpace(value), want) {
-			return true
-		}
-	}
-	return false
 }
 
 func validateNoWhitespaceField(name, value string) error {

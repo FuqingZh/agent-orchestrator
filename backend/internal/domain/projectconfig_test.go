@@ -32,50 +32,41 @@ func TestProjectConfigValidate(t *testing.T) {
 		{"agent rules file bare dot", ProjectConfig{AgentRulesFile: "."}, true},
 		{"good reviewers", ProjectConfig{Reviewers: []ReviewerConfig{{Harness: ReviewerClaudeCode}}}, false},
 		{"good codex reviewer", ProjectConfig{Reviewers: []ReviewerConfig{{Harness: ReviewerCodex}}}, false},
+		{"good copilot reviewer", ProjectConfig{Reviewers: []ReviewerConfig{{Harness: ReviewerCopilot}}}, false},
+		{"good cursor reviewer", ProjectConfig{Reviewers: []ReviewerConfig{{Harness: ReviewerCursor}}}, false},
+		{"good Kilo Code reviewer", ProjectConfig{Reviewers: []ReviewerConfig{{Harness: ReviewerKiloCode}}}, false},
 		{"good opencode reviewer", ProjectConfig{Reviewers: []ReviewerConfig{{Harness: ReviewerOpenCode}}}, false},
+		{"good kiro reviewer", ProjectConfig{Reviewers: []ReviewerConfig{{Harness: ReviewerKiro}}}, false},
+		{"good pi reviewer", ProjectConfig{Reviewers: []ReviewerConfig{{Harness: ReviewerPi}}}, false},
+		{"good experimental qwen reviewer", ProjectConfig{Reviewers: []ReviewerConfig{{Harness: ReviewerQwen}}}, false},
+		{"good experimental agy reviewer", ProjectConfig{Reviewers: []ReviewerConfig{{Harness: ReviewerAgy}}}, false},
+		{"good experimental continue reviewer", ProjectConfig{Reviewers: []ReviewerConfig{{Harness: ReviewerContinue}}}, false},
+		{"good experimental goose reviewer", ProjectConfig{Reviewers: []ReviewerConfig{{Harness: ReviewerGoose}}}, false},
+		{"good experimental vibe reviewer", ProjectConfig{Reviewers: []ReviewerConfig{{Harness: ReviewerVibe}}}, false},
+		{"good experimental Devin reviewer", ProjectConfig{Reviewers: []ReviewerConfig{{Harness: ReviewerDevin}}}, false},
+		{"good experimental Droid reviewer", ProjectConfig{Reviewers: []ReviewerConfig{{Harness: ReviewerDroid}}}, false},
+		{"good experimental Kimi reviewer", ProjectConfig{Reviewers: []ReviewerConfig{{Harness: ReviewerKimi}}}, false},
+		{"good Muse reviewer", ProjectConfig{Reviewers: []ReviewerConfig{{Harness: ReviewerMuse}}}, false},
 		{"unknown reviewer harness", ProjectConfig{Reviewers: []ReviewerConfig{{Harness: "nope"}}}, true},
-		{"worker-only harness is not auto a reviewer", ProjectConfig{Reviewers: []ReviewerConfig{{Harness: ReviewerHarness(HarnessAider)}}}, true},
+		{"good interactive Amp reviewer", ProjectConfig{Reviewers: []ReviewerConfig{{Harness: ReviewerAmp}}}, false},
+		{"good interactive Aider reviewer", ProjectConfig{Reviewers: []ReviewerConfig{{Harness: ReviewerAider}}}, false},
+		{"good experimental Grok reviewer", ProjectConfig{Reviewers: []ReviewerConfig{{Harness: ReviewerGrok}}}, false},
+		{"good experimental Crush reviewer", ProjectConfig{Reviewers: []ReviewerConfig{{Harness: ReviewerCrush}}}, false},
+		{"good experimental Auggie reviewer", ProjectConfig{Reviewers: []ReviewerConfig{{Harness: ReviewerAuggie}}}, false},
+		{"good experimental Cline reviewer", ProjectConfig{Reviewers: []ReviewerConfig{{Harness: ReviewerCline}}}, false},
+		{"good experimental Autohand reviewer", ProjectConfig{Reviewers: []ReviewerConfig{{Harness: ReviewerAutohand}}}, false},
 		{"empty reviewer harness", ProjectConfig{Reviewers: []ReviewerConfig{{Harness: ""}}}, true},
 		{"tracker intake assignee rule", ProjectConfig{TrackerIntake: TrackerIntakeConfig{Enabled: true, Assignee: "alice"}}, false},
 		{"tracker intake explicit github", ProjectConfig{TrackerIntake: TrackerIntakeConfig{Enabled: true, Provider: TrackerProviderGitHub, Assignee: "alice"}}, false},
 		{"tracker intake no rule", ProjectConfig{TrackerIntake: TrackerIntakeConfig{Enabled: true}}, true},
-		{"tracker intake linear", ProjectConfig{TrackerIntake: TrackerIntakeConfig{Enabled: true, Provider: TrackerProviderLinear, Repo: "project-uuid", Assignee: "alice"}}, false},
-		{"tracker intake linear requires project", ProjectConfig{TrackerIntake: TrackerIntakeConfig{Enabled: true, Provider: TrackerProviderLinear, Assignee: "alice"}}, true},
-		{"tracker intake unknown provider", ProjectConfig{TrackerIntake: TrackerIntakeConfig{Enabled: true, Provider: "gitlab", Assignee: "alice"}}, true},
+		{"tracker intake unknown provider", ProjectConfig{TrackerIntake: TrackerIntakeConfig{Enabled: true, Provider: "linear", Assignee: "alice"}}, true},
 		{"tracker intake repo with whitespace", ProjectConfig{TrackerIntake: TrackerIntakeConfig{Enabled: true, Repo: " acme/demo", Assignee: "alice"}}, true},
 		{"tracker intake assignee with whitespace", ProjectConfig{TrackerIntake: TrackerIntakeConfig{Enabled: true, Assignee: " alice"}}, true},
-		{"good bot review feedback allowlist", ProjectConfig{BotReviewFeedback: BotReviewFeedbackConfig{AllowAuthors: []string{"github-actions"}}}, false},
-		{"good bot review feedback denylist", ProjectConfig{BotReviewFeedback: BotReviewFeedbackConfig{DenyAuthors: []string{"react-doctor[bot]"}}}, false},
-		{"bot review feedback allowlist whitespace", ProjectConfig{BotReviewFeedback: BotReviewFeedbackConfig{AllowAuthors: []string{" github-actions"}}}, true},
-		{"bot review feedback denylist empty", ProjectConfig{BotReviewFeedback: BotReviewFeedbackConfig{DenyAuthors: []string{""}}}, true},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			if err := tt.cfg.Validate(); (err != nil) != tt.wantErr {
 				t.Fatalf("Validate() err = %v, wantErr = %v", err, tt.wantErr)
-			}
-		})
-	}
-}
-
-func TestBotReviewFeedbackConfigAllowsAuthor(t *testing.T) {
-	tests := []struct {
-		name   string
-		cfg    BotReviewFeedbackConfig
-		author string
-		want   bool
-	}{
-		{"default allows concrete author", BotReviewFeedbackConfig{}, "github-actions", true},
-		{"default rejects empty author", BotReviewFeedbackConfig{}, "", false},
-		{"allowlist permits listed author", BotReviewFeedbackConfig{AllowAuthors: []string{"github-actions"}}, "GitHub-Actions", true},
-		{"allowlist rejects unlisted author", BotReviewFeedbackConfig{AllowAuthors: []string{"react-doctor[bot]"}}, "github-actions", false},
-		{"denylist rejects listed author", BotReviewFeedbackConfig{DenyAuthors: []string{"github-actions"}}, "github-actions", false},
-		{"denylist wins over allowlist", BotReviewFeedbackConfig{AllowAuthors: []string{"github-actions"}, DenyAuthors: []string{"github-actions"}}, "github-actions", false},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			if got := tt.cfg.AllowsAuthor(tt.author); got != tt.want {
-				t.Fatalf("AllowsAuthor(%q) = %v, want %v", tt.author, got, tt.want)
 			}
 		})
 	}
@@ -134,8 +125,8 @@ func TestResolveReviewerHarness(t *testing.T) {
 		t.Fatalf("configured reviewer = %q, want claude-code", got)
 	}
 
-	// No reviewer configured: reuse the worker's harness when it is itself a
-	// supported reviewer.
+	// No reviewer configured: preserve automatic inheritance only for the
+	// original unattended-safe reviewer set.
 	if got := (ProjectConfig{}).ResolveReviewerHarness(HarnessClaudeCode); got != ReviewerClaudeCode {
 		t.Fatalf("claude-code worker = %q, want reviewer claude-code", got)
 	}
@@ -145,14 +136,18 @@ func TestResolveReviewerHarness(t *testing.T) {
 	if got := (ProjectConfig{}).ResolveReviewerHarness(HarnessOpenCode); got != ReviewerOpenCode {
 		t.Fatalf("opencode worker = %q, want reviewer opencode", got)
 	}
-
-	// A worker harness that is not itself a reviewer (e.g. crush, aider) falls
-	// back to claude-code.
-	if got := (ProjectConfig{}).ResolveReviewerHarness(HarnessCrush); got != FallbackReviewerHarness {
-		t.Fatalf("crush worker = %q, want %q", got, FallbackReviewerHarness)
+	if got := (ProjectConfig{}).ResolveReviewerHarness(HarnessMuse); got != ReviewerMuse {
+		t.Fatalf("muse worker = %q, want reviewer muse", got)
 	}
-	if got := (ProjectConfig{}).ResolveReviewerHarness(HarnessAider); got != FallbackReviewerHarness {
-		t.Fatalf("fallback = %q, want %q", got, FallbackReviewerHarness)
+	for _, worker := range []AgentHarness{
+		HarnessCopilot, HarnessCursor, HarnessKilocode, HarnessKiro, HarnessPi,
+		HarnessAider, HarnessAmp, HarnessQwen, HarnessAgy, HarnessContinue,
+		HarnessGoose, HarnessVibe, HarnessDevin, HarnessDroid, HarnessKimi,
+		HarnessGrok, HarnessCrush, HarnessAuggie, HarnessCline, HarnessAutohand,
+	} {
+		if got := (ProjectConfig{}).ResolveReviewerHarness(worker); got != FallbackReviewerHarness {
+			t.Errorf("%s worker = %q, want explicit-selection fallback %q", worker, got, FallbackReviewerHarness)
+		}
 	}
 }
 

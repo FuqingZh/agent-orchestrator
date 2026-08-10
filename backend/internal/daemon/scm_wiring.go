@@ -33,18 +33,9 @@ func startSCMObserver(ctx context.Context, store *sqlite.Store, lcm *lifecycle.M
 }
 
 func newGitHubSCMProvider(logger *slog.Logger) (*scmgithub.Provider, error) {
-	var tokens scmgithub.TokenSource
-	app, configured, err := configuredGitHubAppTokenSource()
-	if err != nil {
-		return nil, err
-	}
-	if configured {
-		tokens = app
-	} else {
-		tokens = scmgithub.FallbackTokenSource{
-			scmgithub.EnvTokenSource{EnvVars: []string{"AO_GITHUB_TOKEN"}},
-			&scmgithub.GHTokenSource{},
-		}
+	tokens := scmgithub.FallbackTokenSource{
+		scmgithub.EnvTokenSource{EnvVars: []string{"AO_GITHUB_TOKEN"}},
+		&scmgithub.GHTokenSource{},
 	}
 	// Avoid token preflight on daemon startup and session service construction.
 	// GHTokenSource may shell out to `gh`, which is too slow/flaky for the startup

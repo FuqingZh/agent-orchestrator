@@ -13,6 +13,7 @@ const link = (over: Partial<OrchestratorLink> = {}): OrchestratorLink => ({
 	id: "proj-orchestrator",
 	projectId: "proj",
 	projectName: "proj",
+	mode: "chat",
 	...over,
 });
 
@@ -38,6 +39,7 @@ describe("orchestratorState", () => {
 		expect(orchestratorState(link())).toBe("running");
 	});
 });
+
 describe("launchIntent", () => {
 	// The regression this file exists for. SpawnOrchestrator treats clean:false
 	// as an idempotent ensure — `if len(existing) > 0 { return newestSession }` —

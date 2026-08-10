@@ -151,10 +151,6 @@ ao project set-config <id> [flags]
 | `--post-create stringArray` | Command to run after workspace creation (repeatable) | - |
 | `--session-prefix string` | Displayed session-id prefix | - |
 | `--symlink stringArray` | Repo-relative path to symlink into workspaces (repeatable) | - |
-| `--tracker-assignee string` | Provider assignee ID, login, email, or name required by intake | - |
-| `--tracker-intake` | Enable issue intake | - |
-| `--tracker-provider string` | `github` or `linear`; defaults to `github` | - |
-| `--tracker-repo string` | GitHub `owner/repo` or Linear project UUID | - |
 | `--worker-agent string` | Harness override for worker sessions | - |
 
 **Examples:**
@@ -177,16 +173,4 @@ ao project set-config agent-orchestrator --agent-rules "Run focused tests before
 ```bash
 # Load worker rules from a repo-relative file
 ao project set-config agent-orchestrator --agent-rules-file docs/ao-worker-rules.md
-```
-
-```bash
-# Opt into assignee-scoped GitHub issue intake
-ao project set-config agent-orchestrator --tracker-intake \
-  --tracker-assignee FuqingZh
-```
-
-```bash
-# Opt into project- and assignee-scoped Linear intake
-ao project set-config agent-orchestrator --tracker-intake --tracker-provider linear \
-  --tracker-repo PROJECT_UUID --tracker-assignee USER_ID
 ```
