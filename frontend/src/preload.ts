@@ -4,7 +4,6 @@ import type {
 	BrowserAgentActivityState,
 	BrowserDevToolsInput,
 	BrowserDevToolsState,
-	BrowserMirrorFrame,
 	BrowserNavState,
 	BrowserRect,
 	BrowserTabsState,
@@ -20,6 +19,7 @@ import type { DaemonStatus } from "./shared/daemon-status";
 import type { TelemetryBootstrap } from "./shared/telemetry";
 import type { MigrationState } from "./main/app-state";
 import type { UpdateSettings, UpdateStatus } from "./main/update-settings";
+import type { CloudAccount } from "./shared/cloud-account";
 import type { UpdateOutcome } from "./shared/update-telemetry";
 import type { UiSettings } from "./main/ui-settings";
 import type { UpdateCheckOptions } from "./main/auto-updater";
@@ -30,11 +30,25 @@ import type {
 	BrowserAnnotationSubmitPayload,
 } from "./shared/browser-annotations";
 
+if (typeof document !== "undefined") {
+	const markNativeBrowserComposition = () => {
+		const root = document.documentElement;
+		if (root) {
+			root.dataset.nativeBrowserComposition = "true";
+			root.dataset.aoPlatform = process.platform;
+		}
+	};
+	if (document.readyState === "loading") {
+		document.addEventListener("DOMContentLoaded", markNativeBrowserComposition, { once: true });
+	} else {
+		markNativeBrowserComposition();
+	}
+}
+
 export type BrowserBoundsInput = {
 	viewId: string;
 	rect: BrowserRect;
 	visible: boolean;
-	parked?: boolean;
 };
 
 export type BrowserNavigateInput = {
@@ -195,13 +209,13 @@ const api = {
 		getBootstrap: () => ipcRenderer.invoke("telemetry:getBootstrap") as Promise<TelemetryBootstrap | null>,
 	},
 	browser: {
+		nativeCompositionEnabled: true,
 		ensure: (sessionId: string) => ipcRenderer.invoke("browser:ensure", sessionId) as Promise<BrowserNavState>,
 		setBounds: (input: BrowserBoundsInput) => ipcRenderer.send("browser:setBounds", input),
+		setOverlayOpen: (open: boolean) => ipcRenderer.send("browser:overlay", open),
 		navigate: (input: BrowserNavigateInput) =>
 			ipcRenderer.invoke("browser:navigate", input) as Promise<BrowserNavState>,
 		clear: (viewId: string) => ipcRenderer.invoke("browser:clear", viewId) as Promise<BrowserNavState>,
-		capture: (viewId: string) => ipcRenderer.invoke("browser:capture", viewId) as Promise<BrowserMirrorFrame | null>,
-		requestMirror: (viewId: string) => ipcRenderer.invoke("browser:requestMirror", viewId) as Promise<boolean>,
 		goBack: (viewId: string) => ipcRenderer.invoke("browser:goBack", viewId) as Promise<BrowserNavState>,
 		goForward: (viewId: string) => ipcRenderer.invoke("browser:goForward", viewId) as Promise<BrowserNavState>,
 		reload: (viewId: string) => ipcRenderer.invoke("browser:reload", viewId) as Promise<BrowserNavState>,
@@ -211,6 +225,8 @@ const api = {
 			ipcRenderer.invoke("browser:selectTab", input) as Promise<BrowserTabsState>,
 		closeTab: (input: { viewId: string; tabId: string }) =>
 			ipcRenderer.invoke("browser:closeTab", input) as Promise<BrowserTabsState>,
+		openTab: (input: { viewId: string; url?: string }) =>
+			ipcRenderer.invoke("browser:openTab", input) as Promise<BrowserTabsState>,
 		devtools: (input: BrowserDevToolsInput) =>
 			ipcRenderer.invoke("browser:devtools", input) as Promise<BrowserDevToolsState>,
 		destroy: (viewId: string) => ipcRenderer.send("browser:destroy", viewId),
@@ -328,6 +344,18 @@ const api = {
 	featureBuilds: {
 		list: () => ipcRenderer.invoke("featureBuilds:list") as Promise<FeatureBuild[]>,
 		getActive: () => ipcRenderer.invoke("featureBuilds:getActive") as Promise<{ pr: number } | null>,
+	},
+	cloud: {
+		getSession: () => ipcRenderer.invoke("cloud:getSession") as Promise<CloudAccount | null>,
+		signIn: () => ipcRenderer.invoke("cloud:signIn") as Promise<void>,
+		signOut: () => ipcRenderer.invoke("cloud:signOut") as Promise<void>,
+		onSessionChanged: (listener: (account: CloudAccount | null) => void) => {
+			const wrapped = (_event: Electron.IpcRendererEvent, account: CloudAccount | null) => listener(account);
+			ipcRenderer.on("cloud:sessionChanged", wrapped);
+			return () => {
+				ipcRenderer.off("cloud:sessionChanged", wrapped);
+			};
+		},
 	},
 };
 

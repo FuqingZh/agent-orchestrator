@@ -100,6 +100,8 @@ async function fetchWorkspaces(): Promise<WorkspaceSummary[]> {
 						scmStatus,
 						isTerminated: session.isTerminated,
 						terminateOnPrMerge: session.terminateOnPrMerge ?? false,
+						autoInjectReview: session.autoInjectReview ?? true,
+						autoInjectCI: session.autoInjectCI ?? true,
 						createdAt: session.createdAt,
 						updatedAt: session.updatedAt,
 						activity,

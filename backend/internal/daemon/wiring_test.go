@@ -548,8 +548,10 @@ func TestWiring_StartLifecycleThreadsMessengerIntoLCM(t *testing.T) {
 		t.Fatal(err)
 	}
 	rec, err := store.CreateSession(ctx, domain.SessionRecord{
-		ProjectID: "p", Kind: domain.KindWorker,
-		Activity: domain.Activity{State: domain.ActivityIdle, LastActivityAt: time.Now()},
+		ProjectID:    "p",
+		Kind:         domain.KindWorker,
+		Activity:     domain.Activity{State: domain.ActivityIdle, LastActivityAt: time.Now()},
+		AutoInjectCI: true,
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -569,6 +571,15 @@ func TestWiring_StartLifecycleThreadsMessengerIntoLCM(t *testing.T) {
 			HeadSHA:      "c1",
 			FailedChecks: []ports.SCMCheckObservation{{Name: "build", Status: string(domain.PRCheckFailed), LogTail: "boom"}},
 		},
+	}
+	if err := store.WriteSCMObservation(ctx, domain.PullRequest{
+		URL:       obs.PR.URL,
+		SessionID: rec.ID,
+		Number:    obs.PR.Number,
+		HeadSHA:   obs.PR.HeadSHA,
+		UpdatedAt: time.Now(),
+	}, nil, nil, nil, nil, ports.ReviewWritePreserve); err != nil {
+		t.Fatalf("persist PR before lifecycle: %v", err)
 	}
 	if err := stack.LCM.ApplySCMObservation(ctx, rec.ID, obs); err != nil {
 		t.Fatalf("ApplySCMObservation: %v", err)
@@ -624,7 +635,9 @@ type fakeSessionLifecycle struct {
 	restoreErr       error
 }
 
-func (f *fakeSessionLifecycle) Send(context.Context, domain.SessionID, string) error { return nil }
+func (f *fakeSessionLifecycle) Send(context.Context, domain.SessionID, string, *ports.SpawnAttachment) error {
+	return nil
+}
 
 func (f *fakeSessionLifecycle) Kill(_ context.Context, _ domain.SessionID) (bool, error) {
 	return false, nil
@@ -642,7 +655,11 @@ func (f *fakeSessionLifecycle) RestoreAll(_ context.Context) error {
 
 func (f *fakeSessionLifecycle) SetShellTerminalCloser(sessionmanager.ShellTerminalCloser) {}
 func (f *fakeSessionLifecycle) SetTerminalInputGate(sessionmanager.TerminalInputGate)     {}
+func (f *fakeSessionLifecycle) AcquireSessionInput(domain.SessionID) (func(), bool) {
+	return func() {}, true
+}
 
+func (f *fakeSessionLifecycle) SessionMutationInProgress(domain.SessionID) bool         { return false }
 func (f *fakeSessionLifecycle) SetReviewerTerminator(sessionmanager.ReviewerTerminator) {}
 
 // TestWiring_SessionLifecycleInterfaceInvokedByDaemon asserts the

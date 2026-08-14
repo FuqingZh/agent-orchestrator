@@ -9,7 +9,9 @@ import (
 	"testing"
 )
 
-func TestV0121MigrationCompatibility(t *testing.T) {
+const currentStableMigrationVersion int64 = 88
+
+func TestV0124MigrationCompatibility(t *testing.T) {
 	for _, tc := range []struct {
 		name         string
 		startVersion int64
@@ -61,8 +63,8 @@ WHERE is_applied = 1
 `).Scan(&current); err != nil {
 				t.Fatalf("read current migration version: %v", err)
 			}
-			if current != 82 {
-				t.Fatalf("current migration version = %d, want 82", current)
+			if current != currentStableMigrationVersion {
+				t.Fatalf("current migration version = %d, want %d", current, currentStableMigrationVersion)
 			}
 
 			var appliedBefore int
@@ -142,8 +144,8 @@ WHERE is_applied = 1
 `).Scan(&current); err != nil {
 		t.Fatalf("read repaired migration version: %v", err)
 	}
-	if current != 82 {
-		t.Fatalf("repaired migration version = %d, want 82", current)
+	if current != currentStableMigrationVersion {
+		t.Fatalf("repaired migration version = %d, want %d", current, currentStableMigrationVersion)
 	}
 }
 
