@@ -9,6 +9,15 @@ This file tracks progress. For what the product _is_ and how to run it, see the
 top-level [`README.md`](../README.md); for the backend mental model see
 [`architecture.md`](architecture.md).
 
+## Baseline provenance
+
+This candidate synchronizes the fork from upstream stable `v0.12.4` at
+`c01ef2d39783c1bc9f99ed75abfb7e90e6c7d3bf` with a normal merge from fork
+`main` at `17748630b701367bc70edfab6155c272eb10595b`. Fork-only runtime
+changes remain recoverable from `archive/fork-private-main-c55165a8`; worker
+process containment from PR #3550 is a separate contribution and is not part
+of this stable baseline.
+
 ## Build & test
 
 The local gate is the backend Go build and race-enabled test suite:
