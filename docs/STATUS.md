@@ -9,6 +9,15 @@ This file tracks progress. For what the product _is_ and how to run it, see the
 top-level [`README.md`](../README.md); for the backend mental model see
 [`architecture.md`](architecture.md).
 
+## Baseline provenance
+
+This candidate synchronizes the fork from upstream stable `v0.12.4` at
+`c01ef2d39783c1bc9f99ed75abfb7e90e6c7d3bf` with a normal merge from fork
+`main` at `17748630b701367bc70edfab6155c272eb10595b`. Fork-only runtime
+changes remain recoverable from `archive/fork-private-main-c55165a8`; worker
+process containment from PR #3550 is a separate contribution and is not part
+of this stable baseline.
+
 ## Build & test
 
 The local gate is the backend Go build and race-enabled test suite:
@@ -57,11 +66,11 @@ surface (`npm run sqlc`, `npm run api`).
   `POST /reviews/{id}/send`.
 - Interactive reviewer panes for Aider, Agy, Amp, Auggie, Autohand,
   Claude Code, Cline, Codex, Continue, GitHub Copilot, Crush, Cursor, Devin,
-  Droid, Goose, Grok, Kilo Code, Kiro, Kimi, OpenCode, Pi, Qwen, and Vibe. Pi uses an AO-data-owned extension with built-in/project
+  Droid, Goose, Grok, Kilo Code, Kimchi, Kiro, Kimi, OpenCode, Pi, Qwen, and Vibe. Pi uses an AO-data-owned extension with built-in/project
   resources disabled, structured read-only inspection/reporting tools, and
   Escape-based turn cancellation. Kiro also uses its native Escape
   cancellation. Continue, Qwen, and Vibe also use Escape cancellation. Agy,
-  Continue, Devin, Droid, Goose, Kimi, Qwen, and Vibe are explicitly experimental and host-trusted. Grok, Crush, Auggie, Cline, and Autohand are experimental user-approved reviewers that retain their native approval prompts instead of receiving broad unattended flags:
+  Continue, Devin, Droid, Goose, Kimchi, Kimi, Qwen, and Vibe are explicitly experimental and host-trusted. Grok, Crush, Auggie, Cline, and Autohand are experimental user-approved reviewers that retain their native approval prompts instead of receiving broad unattended flags:
   native modes, autonomous settings, and prompts are not OS or network containment.
 - The provider-neutral interactive-reviewer capability gateway and neutral
   AO-owned working-directory contract are available. The experimental

@@ -1,9 +1,9 @@
 # Upstream migration map
 
-Status: current for direct upstream `v0.12.2` synchronization
-(`b6609ae610e809309be86fce56c0845cc45628cb`)
+Status: current for direct upstream `v0.12.4` synchronization
+(`c01ef2d39783c1bc9f99ed75abfb7e90e6c7d3bf`)
 
-The runtime source follows upstream `v0.12.2`. The migration files below are
+The runtime source follows upstream `v0.12.4`. The migration files below are
 the only fork-line compatibility retained in the candidate. Already-published
 fork migrations are immutable; upstream migrations that collide with an
 unpublished fork number are copied byte-for-byte to the next available number.
@@ -49,6 +49,7 @@ byte-identical to the source file at the recorded upstream commit.
 | `0049_review_per_harness.sql` | `d15fd8277c1b63a1a7ebdb55735b9ed6091cf118` | `0051_review_per_harness.sql` | `720fb0658b813368d3ae9aab914634c85638582207f6f506fa9139a21527ff1a` |
 | `0052_model_usage.sql` | `ae0541324accf9f91f8f7de48ebafa2b5692ce36` | `0052_model_usage.sql` | `949759bf63f657c3caf137e4c771d0ae8b9f0390a050278e3a22e7421726cacd` |
 | `0053_allow_muse_harness.sql` | `ef8cdb30938b13c49e0837e87a3a44a4af9bc116` | `0053_allow_muse_harness.sql` | `c2b51ab364ad16adb55fc8a3ec96bc64799b525413ab22b7699c7b6dfd1cad78` |
+| `0054_allow_kimchi_harness.sql` | `0c98a7a8adfef4f73f58b4ecf2f080a59ea0fef7` | `0054_allow_kimchi_harness.sql` | `34a8717ee151c4303a533667718715e24641ea317be83617f3b462edc17737c2` |
 | `0066_chat_session_mode.sql` | `7239bb95383c55be391c19ff749b71153eb554c1` | `0066_chat_session_mode.sql` | `ead224c711003cd908e541877da7471ae9543d677c27f384a3e653fefc337f4c` |
 | `0067_app_settings.sql` | `7239bb95383c55be391c19ff749b71153eb554c1` | `0067_app_settings.sql` | `9ea7872219ca96f87c912238b486ae4e9436d6f0512460085a7b4130f614e128` |
 | `0068_conversation_turn_settings.sql` | `7239bb95383c55be391c19ff749b71153eb554c1` | `0068_conversation_turn_settings.sql` | `682d992e547853c18ba339840ee30c0c388b1d13ad2bafa90676be6c64ba1b75` |
@@ -66,7 +67,14 @@ byte-identical to the source file at the recorded upstream commit.
 | `0080_review_per_harness.sql` | `d15fd8277c1b63a1a7ebdb55735b9ed6091cf118` | `0080_review_per_harness.sql` | `56b280912add643b94a34e1a323f458e06ca900b93bc9076e3a37cf515ef3387` |
 | `0081_browser_capability_verifier.sql` | `c9e1c676baee8ab2e860a8110f2539a460e73a11` | `0081_browser_capability_verifier.sql` | `aef4c4efb367a2b15a4e2d78a6c9d03543c73359573e7308e0e6d8758880676a` |
 | `0082_allow_prime_agent_harness.sql` | `6c72814f9849e95ad85fe42e88fee1c540d590ad` | `0082_allow_prime_agent_harness.sql` | `36dc2d339db5f10106188a94afd33dea7a5560fd25d6047c8cea586864a90e25` |
+| `0083_reconcile_kimchi_prime_agent_harnesses.sql` | `0c98a7a8adfef4f73f58b4ecf2f080a59ea0fef7` | `0083_reconcile_kimchi_prime_agent_harnesses.sql` | `adf02802f66c15d286574f4c854b7cd2a2e9e5494a1f8a15602840659ebe88ce` |
+| `0084_add_session_auto_inject_review.sql` | `f65c48e296e20a816221a4003c75a5f0387967ec` | `0084_add_session_auto_inject_review.sql` | `30203959a0a623e62424e7446a8f8c8f9aac1174059c83634a778a4ca15de84c` |
+| `0085_agent_switching.sql` | `01cb67fe11734d725b1a84deb130fe58b40203d6` | `0085_agent_switching.sql` | `b3871aaf81c982886f3385f276aed543abdce029a62057f1a6708a3b5c643bc3` |
+| `0086_workspace_repo_default_branch.sql` | `0c60f21360f1718c75394649e8e3634c0b690e65` | `0086_workspace_repo_default_branch.sql` | `97b86b2e4f1d6e25e6c3d80e527ab7d84dadb4674419aebae0b2827b0e7aa1cc` |
+| `0087_conversation_branches.sql` | `5778b74db45e4516f918ea4ba502bcda22b05b52` | `0087_conversation_branches.sql` | `c7e7e1e41bcc83361db7fb68df5b646a5aa976f5230ec9f354a7c35e92dfb98e` |
+| `0088_add_auto_inject_ci_toggle.sql` | `461a6df56994f5e959eb3515199a614c31182ce0` | `0088_add_auto_inject_ci_toggle.sql` | `9dff9f00dd75d99af4d01b8132320eeec27def6ed8aeb3648779582e308f76f2` |
 
 The candidate has exactly one migration filename per numeric version. The
-observed upstream `main` migrations after `v0.12.2` are outside this stable
+v0.12.4 additions above are source-identical and require no fork renumbering.
+Observed upstream `main` migrations after `v0.12.4` remain outside this stable
 baseline and are not reserved or cherry-picked here.
