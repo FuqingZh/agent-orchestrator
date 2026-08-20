@@ -11,6 +11,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"time"
@@ -50,6 +51,17 @@ const (
 	TelemetryRemotePostHog TelemetryRemote = "posthog"
 )
 
+// ProcessContainment selects the operating-system boundary used for worker
+// processes. The zero value preserves the historical tmux session-id reaper.
+type ProcessContainment string
+
+const (
+	// ProcessContainmentNone keeps the existing tmux session-id reaper.
+	ProcessContainmentNone ProcessContainment = ""
+	// ProcessContainmentSystemd opts into Linux systemd user-scope containment.
+	ProcessContainmentSystemd ProcessContainment = "systemd"
+)
+
 // TelemetryConfig controls local and remote telemetry behavior.
 type TelemetryConfig struct {
 	Events      bool
@@ -67,6 +79,21 @@ type TelemetryConfig struct {
 	// binary has no reliable version of its own (see cli.Version, which release
 	// tooling does not currently override), so the supervisor passes it in.
 	AppVersion string
+}
+
+// GitLabConfig carries the self-managed GitLab host allowlist and per-host
+// token overrides. It is loaded once at daemon boot from environment variables
+// (no hot-reload), matching the existing config pattern. gitlab.com is always
+// allowed (hardcoded in the provider) and does not need to appear here.
+type GitLabConfig struct {
+	// AllowedHosts is the list of self-managed GitLab hosts (each may include a
+	// port, e.g. "gitlab.internal:8443"). gitlab.com is always allowed and is not
+	// included here.
+	AllowedHosts []string
+	// HostTokens maps a self-managed host to a token override. Hosts in
+	// AllowedHosts without an explicit entry fall back to the default token
+	// (AO_GITLAB_TOKEN / GITLAB_TOKEN / glab).
+	HostTokens map[string]string
 }
 
 // DefaultAllowedOrigins are the browser origins the daemon's CORS boundary
@@ -119,6 +146,13 @@ type Config struct {
 	// normalizes it. The desktop uses this to identify dev daemons after the
 	// process cwd is moved to the stable data dir.
 	StartupWorkingDirectory string
+	// ProcessContainment selects the worker process ownership boundary.
+	// Unset preserves the historical tmux session-id reaper; systemd is an
+	// explicit Linux-only opt-in.
+	ProcessContainment ProcessContainment
+	// GitLab carries the self-managed GitLab host allowlist and per-host
+	// token overrides, loaded once at boot from environment variables.
+	GitLab GitLabConfig
 }
 
 // Addr returns the host:port the HTTP server binds. It uses net.JoinHostPort so
@@ -147,6 +181,9 @@ func (c Config) Addr() string {
 //	AO_TELEMETRY_REMOTE  remote exporter off|posthog (default off)
 //	AO_TELEMETRY_POSTHOG_KEY   PostHog project key
 //	AO_TELEMETRY_POSTHOG_HOST  PostHog host (default DefaultTelemetryPostHogHost)
+//	AO_PROCESS_CONTAINMENT     worker process boundary (unset|systemd)
+//	AO_GITLAB_ALLOWED_HOSTS    comma-separated self-managed GitLab hosts (each may include :port)
+//	AO_GITLAB_HOST_TOKENS      host=token,host=token per-host token overrides
 //
 // The bind host is not configurable: the daemon is loopback-only by design.
 func Load() (Config, error) {
@@ -193,6 +230,12 @@ func Load() (Config, error) {
 	if raw := os.Getenv("AO_AGENT"); raw != "" {
 		cfg.Agent = raw
 	}
+
+	containment, err := parseProcessContainment(os.Getenv("AO_PROCESS_CONTAINMENT"), runtime.GOOS)
+	if err != nil {
+		return Config{}, err
+	}
+	cfg.ProcessContainment = containment
 
 	// A missing AO_APP_RUN_ID means nothing is supervising this daemon, so this
 	// boot IS the run: mint an id rather than leaving it empty, which would make
@@ -256,6 +299,26 @@ func Load() (Config, error) {
 		cfg.Telemetry.AppVersion = strings.TrimSpace(raw)
 	}
 
+	if raw, ok := os.LookupEnv("AO_GITLAB_ALLOWED_HOSTS"); ok && raw != "" {
+		hosts := make([]string, 0, 4)
+		for _, h := range strings.Split(raw, ",") {
+			h = strings.TrimSpace(h)
+			if h == "" {
+				continue
+			}
+			hosts = append(hosts, h)
+		}
+		cfg.GitLab.AllowedHosts = hosts
+	}
+
+	if raw, ok := os.LookupEnv("AO_GITLAB_HOST_TOKENS"); ok && raw != "" {
+		tokens, err := parseHostTokenMap("AO_GITLAB_HOST_TOKENS", raw)
+		if err != nil {
+			return Config{}, err
+		}
+		cfg.GitLab.HostTokens = tokens
+	}
+
 	runFile, err := resolveRunFilePath()
 	if err != nil {
 		return Config{}, err
@@ -269,6 +332,21 @@ func Load() (Config, error) {
 	cfg.DataDir = dataDir
 
 	return cfg, nil
+}
+
+func parseProcessContainment(raw, goos string) (ProcessContainment, error) {
+	containment := ProcessContainment(strings.ToLower(strings.TrimSpace(raw)))
+	switch containment {
+	case ProcessContainmentNone:
+		return ProcessContainmentNone, nil
+	case ProcessContainmentSystemd:
+		if goos != "linux" {
+			return ProcessContainmentNone, fmt.Errorf("invalid AO_PROCESS_CONTAINMENT %q: systemd is Linux-only (GOOS=%s)", raw, goos)
+		}
+		return ProcessContainmentSystemd, nil
+	default:
+		return ProcessContainmentNone, fmt.Errorf("invalid AO_PROCESS_CONTAINMENT %q: must be unset|systemd", raw)
+	}
 }
 
 func parseToggleEnv(name, raw string) (bool, error) {
@@ -306,6 +384,37 @@ func parseTelemetryDisabledEvents(raw string) []string {
 		}
 	}
 	return names
+}
+
+// parseHostTokenMap parses a host=token,host=token map. Whitespace around
+// entries, hosts, and tokens is trimmed. Empty entries and entries without an
+// equals sign are skipped. A token containing an equals sign is rejected as
+// ambiguous (a token value with embedded '=' would be indistinguishable from
+// a malformed entry).
+func parseHostTokenMap(name, raw string) (map[string]string, error) {
+	tokens := make(map[string]string, 4)
+	for _, entry := range strings.Split(raw, ",") {
+		entry = strings.TrimSpace(entry)
+		if entry == "" {
+			continue
+		}
+		eq := strings.IndexByte(entry, '=')
+		if eq < 0 {
+			continue // skip entries without an equals sign
+		}
+		host := strings.TrimSpace(entry[:eq])
+		token := strings.TrimSpace(entry[eq+1:])
+		if host == "" {
+			continue
+		}
+		// Reject tokens containing '=' — they would be ambiguous on re-parse
+		// and likely indicate a malformed entry (e.g. host=token=with=equals).
+		if strings.ContainsRune(token, '=') {
+			return nil, fmt.Errorf("invalid %s entry %q: token contains '='", name, entry)
+		}
+		tokens[host] = token
+	}
+	return tokens, nil
 }
 
 // parsePositiveDuration rejects zero and negative durations: a zero

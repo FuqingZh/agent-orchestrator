@@ -3,6 +3,8 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"runtime"
+	"strings"
 	"testing"
 	"time"
 )
@@ -10,7 +12,7 @@ import (
 func TestLoadDefaults(t *testing.T) {
 	// Clear every recognised var so we observe pure defaults regardless of the
 	// surrounding environment.
-	for _, k := range []string{"AO_PORT", "AO_REQUEST_TIMEOUT", "AO_SHUTDOWN_TIMEOUT", "AO_RUN_FILE", "AO_DATA_DIR", "AO_AGENT", "AO_ALLOWED_ORIGINS", "AO_TELEMETRY_EVENTS", "AO_TELEMETRY_METRICS", "AO_TELEMETRY_REMOTE", "AO_TELEMETRY_POSTHOG_KEY", "AO_TELEMETRY_POSTHOG_HOST", "AO_TELEMETRY_DISABLED_EVENTS", "AO_TELEMETRY_APP_VERSION"} {
+	for _, k := range []string{"AO_PORT", "AO_REQUEST_TIMEOUT", "AO_SHUTDOWN_TIMEOUT", "AO_RUN_FILE", "AO_DATA_DIR", "AO_AGENT", "AO_PROCESS_CONTAINMENT", "AO_ALLOWED_ORIGINS", "AO_TELEMETRY_EVENTS", "AO_TELEMETRY_METRICS", "AO_TELEMETRY_REMOTE", "AO_TELEMETRY_POSTHOG_KEY", "AO_TELEMETRY_POSTHOG_HOST", "AO_TELEMETRY_DISABLED_EVENTS", "AO_TELEMETRY_APP_VERSION"} {
 		t.Setenv(k, "")
 	}
 
@@ -29,6 +31,9 @@ func TestLoadDefaults(t *testing.T) {
 	}
 	if cfg.ShutdownTimeout != DefaultShutdownTimeout {
 		t.Errorf("ShutdownTimeout = %s, want %s", cfg.ShutdownTimeout, DefaultShutdownTimeout)
+	}
+	if cfg.ProcessContainment != ProcessContainmentNone {
+		t.Fatalf("ProcessContainment = %q, want unset", cfg.ProcessContainment)
 	}
 	if cfg.RunFilePath == "" {
 		t.Error("RunFilePath is empty, want a resolved default path")
@@ -90,6 +95,7 @@ func TestLoadOverrides(t *testing.T) {
 	t.Setenv("AO_PORT", "4002")
 	t.Setenv("AO_REQUEST_TIMEOUT", "5s")
 	t.Setenv("AO_SHUTDOWN_TIMEOUT", "3s")
+	t.Setenv("AO_PROCESS_CONTAINMENT", "")
 	t.Setenv("AO_RUN_FILE", runFilePath)
 	t.Setenv("AO_DATA_DIR", dataDir)
 	t.Setenv("AO_TELEMETRY_EVENTS", "on")
@@ -125,6 +131,64 @@ func TestLoadOverrides(t *testing.T) {
 	}
 }
 
+func TestParseProcessContainment(t *testing.T) {
+	tests := []struct {
+		name    string
+		raw     string
+		goos    string
+		want    ProcessContainment
+		wantErr string
+	}{
+		{name: "empty on linux", goos: "linux", want: ProcessContainmentNone},
+		{name: "empty on darwin", goos: "darwin", want: ProcessContainmentNone},
+		{name: "empty on windows", goos: "windows", want: ProcessContainmentNone},
+		{name: "systemd on linux", raw: "systemd", goos: "linux", want: ProcessContainmentSystemd},
+		{name: "normalized systemd on linux", raw: " SystemD ", goos: "linux", want: ProcessContainmentSystemd},
+		{name: "systemd on darwin", raw: "systemd", goos: "darwin", wantErr: "systemd is Linux-only (GOOS=darwin)"},
+		{name: "systemd on windows", raw: "systemd", goos: "windows", wantErr: "systemd is Linux-only (GOOS=windows)"},
+		{name: "invalid on linux", raw: "cgroup", goos: "linux", wantErr: "must be unset|systemd"},
+		{name: "invalid on darwin", raw: "cgroup", goos: "darwin", wantErr: "must be unset|systemd"},
+		{name: "invalid on windows", raw: "cgroup", goos: "windows", wantErr: "must be unset|systemd"},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := parseProcessContainment(tc.raw, tc.goos)
+			if tc.wantErr != "" {
+				if err == nil {
+					t.Fatalf("parseProcessContainment(%q, %q) = %q, nil; want error containing %q", tc.raw, tc.goos, got, tc.wantErr)
+				}
+				if !strings.Contains(err.Error(), tc.wantErr) {
+					t.Fatalf("parseProcessContainment(%q, %q) error = %q; want substring %q", tc.raw, tc.goos, err, tc.wantErr)
+				}
+				return
+			}
+
+			if err != nil {
+				t.Fatalf("parseProcessContainment(%q, %q): %v", tc.raw, tc.goos, err)
+			}
+			if got != tc.want {
+				t.Errorf("parseProcessContainment(%q, %q) = %q, want %q", tc.raw, tc.goos, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestLoadProcessContainmentSystemd(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("systemd process containment is Linux-only")
+	}
+	t.Setenv("AO_PROCESS_CONTAINMENT", " SystemD ")
+
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.ProcessContainment != ProcessContainmentSystemd {
+		t.Errorf("ProcessContainment = %q, want systemd", cfg.ProcessContainment)
+	}
+}
+
 func TestLoadInvalid(t *testing.T) {
 	tests := []struct {
 		name string
@@ -134,6 +198,7 @@ func TestLoadInvalid(t *testing.T) {
 		{"port out of range", map[string]string{"AO_PORT": "70000"}},
 		{"bad request timeout", map[string]string{"AO_REQUEST_TIMEOUT": "soon"}},
 		{"bad shutdown timeout", map[string]string{"AO_SHUTDOWN_TIMEOUT": "later"}},
+		{"bad process containment", map[string]string{"AO_PROCESS_CONTAINMENT": "cgroup"}},
 		{"zero request timeout", map[string]string{"AO_REQUEST_TIMEOUT": "0s"}},
 		{"negative request timeout", map[string]string{"AO_REQUEST_TIMEOUT": "-1s"}},
 		{"zero shutdown timeout", map[string]string{"AO_SHUTDOWN_TIMEOUT": "0s"}},
@@ -232,5 +297,138 @@ func TestLoadTelemetryDisabledEventsBlankIsInert(t *testing.T) {
 	}
 	if cfg.Telemetry.AppVersion != "" {
 		t.Fatalf("AppVersion = %q, want empty", cfg.Telemetry.AppVersion)
+	}
+}
+
+func TestLoadGitLabDefaults(t *testing.T) {
+	// Clear the GitLab config vars so we observe pure defaults.
+	for _, k := range []string{"AO_GITLAB_ALLOWED_HOSTS", "AO_GITLAB_HOST_TOKENS"} {
+		t.Setenv(k, "")
+	}
+	cfg, err := Load()
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	if cfg.GitLab.AllowedHosts != nil {
+		t.Errorf("GitLab.AllowedHosts = %v, want nil", cfg.GitLab.AllowedHosts)
+	}
+	if cfg.GitLab.HostTokens != nil {
+		t.Errorf("GitLab.HostTokens = %v, want nil", cfg.GitLab.HostTokens)
+	}
+}
+
+func TestLoadGitLabAllowedHosts(t *testing.T) {
+	tests := []struct {
+		name string
+		env  string
+		want []string
+	}{
+		{"single host", "gitlab.mycompany.com", []string{"gitlab.mycompany.com"}},
+		{"comma-separated", "gitlab.mycompany.com,gitlab.internal.corp", []string{"gitlab.mycompany.com", "gitlab.internal.corp"}},
+		{"trimmed whitespace", " gitlab.mycompany.com , gitlab.internal.corp ", []string{"gitlab.mycompany.com", "gitlab.internal.corp"}},
+		{"empty entries skipped", "gitlab.mycompany.com,,gitlab.internal.corp,", []string{"gitlab.mycompany.com", "gitlab.internal.corp"}},
+		{"with port", "gitlab.internal:8443", []string{"gitlab.internal:8443"}},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv("AO_GITLAB_ALLOWED_HOSTS", tc.env)
+			cfg, err := Load()
+			if err != nil {
+				t.Fatalf("Load: %v", err)
+			}
+			if len(cfg.GitLab.AllowedHosts) != len(tc.want) {
+				t.Fatalf("AllowedHosts = %v, want %v", cfg.GitLab.AllowedHosts, tc.want)
+			}
+			for i, h := range tc.want {
+				if cfg.GitLab.AllowedHosts[i] != h {
+					t.Errorf("AllowedHosts[%d] = %q, want %q", i, cfg.GitLab.AllowedHosts[i], h)
+				}
+			}
+		})
+	}
+}
+
+func TestLoadGitLabHostTokens(t *testing.T) {
+	tests := []struct {
+		name string
+		env  string
+		want map[string]string
+	}{
+		{
+			name: "single host=token",
+			env:  "gitlab.mycompany.com=token-1",
+			want: map[string]string{"gitlab.mycompany.com": "token-1"},
+		},
+		{
+			name: "multiple host=token pairs",
+			env:  "gitlab.mycompany.com=token-1,gitlab.internal.corp=token-2",
+			want: map[string]string{
+				"gitlab.mycompany.com": "token-1",
+				"gitlab.internal.corp": "token-2",
+			},
+		},
+		{
+			name: "trimmed whitespace around entries",
+			env:  " gitlab.mycompany.com = token-1 , gitlab.internal.corp = token-2 ",
+			want: map[string]string{
+				"gitlab.mycompany.com": "token-1",
+				"gitlab.internal.corp": "token-2",
+			},
+		},
+		{
+			name: "host with port",
+			env:  "gitlab.internal:8443=token-port",
+			want: map[string]string{"gitlab.internal:8443": "token-port"},
+		},
+		{
+			name: "empty entries skipped",
+			env:  "gitlab.mycompany.com=token-1,,",
+			want: map[string]string{"gitlab.mycompany.com": "token-1"},
+		},
+		{
+			name: "entry without equals skipped",
+			env:  "gitlab.mycompany.com=token-1,not-a-pair",
+			want: map[string]string{"gitlab.mycompany.com": "token-1"},
+		},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv("AO_GITLAB_HOST_TOKENS", tc.env)
+			cfg, err := Load()
+			if err != nil {
+				t.Fatalf("Load: %v", err)
+			}
+			if len(cfg.GitLab.HostTokens) != len(tc.want) {
+				t.Fatalf("HostTokens = %v, want %v", cfg.GitLab.HostTokens, tc.want)
+			}
+			for k, v := range tc.want {
+				got, ok := cfg.GitLab.HostTokens[k]
+				if !ok {
+					t.Errorf("HostTokens missing key %q", k)
+					continue
+				}
+				if got != v {
+					t.Errorf("HostTokens[%q] = %q, want %q", k, got, v)
+				}
+			}
+		})
+	}
+}
+
+func TestLoadGitLabInvalidHostTokens(t *testing.T) {
+	tests := []struct {
+		name string
+		env  string
+	}{
+		{"token contains equals", "gitlab.mycompany.com=token=with=equals"},
+	}
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv("AO_GITLAB_HOST_TOKENS", tc.env)
+			_, err := Load()
+			if err == nil {
+				t.Fatal("Load() = nil error, want error for malformed AO_GITLAB_HOST_TOKENS")
+			}
+		})
 	}
 }
